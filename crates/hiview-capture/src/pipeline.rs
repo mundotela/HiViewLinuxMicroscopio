@@ -13,6 +13,8 @@ use std::thread::{self, JoinHandle};
 use gst::prelude::*;
 use tracing::{debug, warn};
 
+use hiview_core::Orientation;
+
 use crate::device::CameraDescriptor;
 use crate::error::Error;
 use crate::events::CameraEvent;
@@ -45,6 +47,7 @@ pub struct CapturePipeline {
     frame_bus: FrameBus,
     source: CaptureSource,
     dev_node: Option<PathBuf>,
+    flip: Option<gst::Element>,
     bus_thread: Option<JoinHandle<()>>,
 }
 
@@ -75,6 +78,7 @@ impl CapturePipeline {
                 CaptureSource::Device(desc) => Some(desc.dev_node.clone()),
                 _ => None,
             },
+            flip: pipeline.by_name("flip"),
             pipeline,
             frame_bus,
             source,
@@ -98,6 +102,28 @@ impl CapturePipeline {
     #[must_use]
     pub fn dev_node(&self) -> Option<&PathBuf> {
         self.dev_node.as_ref()
+    }
+
+    /// Changes the `videoflip` `video-direction` live (docs/ARCHITECTURE.md
+    /// §6.4). No-op while the pipeline element is unavailable.
+    pub fn set_orientation(&self, orientation: Orientation) {
+        let Some(flip) = &self.flip else {
+            warn!("set_orientation: pipeline has no videoflip element");
+            return;
+        };
+        flip.set_property(
+            "video-direction",
+            match orientation {
+                Orientation::Identity => gst_video::VideoOrientationMethod::Identity,
+                Orientation::Rot90Cw => gst_video::VideoOrientationMethod::_90r,
+                Orientation::Rot180 => gst_video::VideoOrientationMethod::_180,
+                Orientation::Rot90Ccw => gst_video::VideoOrientationMethod::_90l,
+                Orientation::FlipH => gst_video::VideoOrientationMethod::Horiz,
+                Orientation::FlipV => gst_video::VideoOrientationMethod::Vert,
+                Orientation::Transpose => gst_video::VideoOrientationMethod::UlLr,
+                Orientation::AntiTranspose => gst_video::VideoOrientationMethod::UrLl,
+            },
+        );
     }
 }
 
@@ -225,6 +251,10 @@ fn build_pipeline(source: &CaptureSource, frame_bus: &FrameBus) -> Result<gst::P
     };
     let appsink = build_appsink(frame_bus, sync, skip_first).upcast::<gst::Element>();
     let convert = make("videoconvert")?;
+    // Kept between convert and appsink in every source so `set_orientation`
+    // can swap `video-direction` live (docs/ARCHITECTURE.md §6.4).
+    let flip = make("videoflip")?;
+    flip.set_property("name", "flip");
 
     match source {
         CaptureSource::Test => {
@@ -232,29 +262,29 @@ fn build_pipeline(source: &CaptureSource, frame_bus: &FrameBus) -> Result<gst::P
             src.set_property("is-live", true);
             src.set_property_from_str("pattern", "ball");
             let caps = caps_filter(microscope_caps())?;
-            pipeline.add_many([&src, &caps, &convert, &appsink])?;
-            gst::Element::link_many([&src, &caps, &convert, &appsink])?;
+            pipeline.add_many([&src, &caps, &convert, &flip, &appsink])?;
+            gst::Element::link_many([&src, &caps, &convert, &flip, &appsink])?;
         }
         CaptureSource::Device(desc) => {
             let src = make("v4l2src")?;
             src.set_property("device", desc.dev_node.to_string_lossy().as_ref());
             src.set_property("do-timestamp", true);
-            pipeline.add_many([&src, &convert, &appsink])?;
+            pipeline.add_many([&src, &convert, &flip, &appsink])?;
             if desc.is_microscope {
                 let caps = caps_filter(microscope_caps())?;
                 pipeline.add(&caps)?;
-                gst::Element::link_many([&src, &caps, &convert, &appsink])?;
+                gst::Element::link_many([&src, &caps, &convert, &flip, &appsink])?;
             } else {
-                gst::Element::link_many([&src, &convert, &appsink])?;
+                gst::Element::link_many([&src, &convert, &flip, &appsink])?;
             }
         }
         CaptureSource::File(path) => {
             let src = make("filesrc")?;
             src.set_property("location", path.to_string_lossy().as_ref());
             let decodebin = make("decodebin")?;
-            pipeline.add_many([&src, &decodebin, &convert, &appsink])?;
+            pipeline.add_many([&src, &decodebin, &convert, &flip, &appsink])?;
             gst::Element::link_many([&src, &decodebin])?;
-            gst::Element::link_many([&convert, &appsink])?;
+            gst::Element::link_many([&convert, &flip, &appsink])?;
             link_decodebin_dynamically(&decodebin, &convert);
         }
     }
