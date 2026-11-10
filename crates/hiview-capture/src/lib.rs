@@ -1,7 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 MundoTela Tecnologia
 
-//! Video capture layer for HiView: udev device discovery, the capture
-//! pipeline, the frame bus, the recorder and V4L2 controls.
-//!
-//! Implemented in M1 (discovery and live video); intentionally empty for now.
+//! Video capture hardware layer for HiView: camera discovery (udev/V4L2),
+//! hotplug monitoring and GStreamer pipelines delivering frames to the UI.
+
+mod device;
+mod error;
+mod events;
+mod frame;
+mod pipeline;
+
+pub use device::{CameraDescriptor, CaptureMode, DeviceWatcher, enumerate};
+pub use error::Error;
+pub use events::{CameraEvent, CameraState};
+pub use frame::{Frame, FrameBus, PixelFormat};
+pub use pipeline::{CapturePipeline, CaptureSource};
+
+/// Initializes GStreamer. Idempotent and safe to call from any thread.
+///
+/// # Errors
+/// Returns an error if `gst_init` fails.
+pub fn init() -> Result<(), Error> {
+    gst::init().map_err(Error::Init)
+}
