@@ -65,6 +65,14 @@ impl CameraDescriptor {
             .unwrap_or_else(|| self.dev_node.to_string_lossy().into_owned())
     }
 
+    /// Friendly product name for menus. Drivers often report
+    /// `"Product : driver"` duplicates (e.g. `"HD camera : HD camera"`),
+    /// so only the part before the colon is shown.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.name.split(':').next().map_or(&self.name, str::trim)
+    }
+
     /// Short technical description for logging.
     #[must_use]
     pub fn summary(&self) -> String {

@@ -269,7 +269,7 @@ impl AppModel {
             cameras_menu.append_item(
                 &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
                     &label,
-                    &camera.stable_id(),
+                    &camera.dev_node.to_string_lossy().to_string(),
                 ),
             );
         }
