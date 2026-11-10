@@ -89,7 +89,7 @@ A solução está na seção 6.10.
 - **SO:** Pop!_OS / Ubuntu 24.04 ou superior. Versões mínimas: **GTK 4.14, libadwaita 1.5, GStreamer 1.24**.
   - ✅ **Confirmado na máquina do Henrique (2026-11-10):** `libgtk-4-1 4.14.5`, `libadwaita-1-0 1.5.0`, `libgstreamer1.0-0 1.24.2`. Ou seja, a máquina está **exatamente no mínimo**. Features dos crates fixadas em `gtk4/v4_14` e `libadwaita/v1_5`. **Não usar APIs mais novas**, mesmo que o ambiente do Devin as tenha.
 - **Ambiente do Devin:** o Devin roda como **Devin Local na própria máquina alvo**. O ambiente de desenvolvimento é o ambiente de produção, então não há divergência de versões.
-- **Toolchain:** Rust stable, edition 2024.
+- **Toolchain:** Rust stable, edition 2024, **mínimo 1.93** (exigência do `relm4 0.11`). Fonte única: `rust-version` em `[workspace.package]`. O `check-env.sh` lê esse valor de lá.
 
 ---
 
@@ -399,5 +399,5 @@ O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar n
 1. ~~Versões de GTK, libadwaita e GStreamer na máquina do Henrique~~: resolvido (§4).
 2. Saída de `v4l2-ctl -d /dev/video2 --list-ctrls`.
 3. Os LEDs são controláveis por software? (Depende do item 2.)
-4. Licença do projeto (sugestão: GPL-3.0-or-later, compatível com `x264enc`).
+4. ~~Licença~~: resolvido (2026-11-10). **GPL-3.0-or-later**, copyright MundoTela Tecnologia (`LICENSE` na raiz com o texto oficial da GPLv3, `license = "GPL-3.0-or-later"` no workspace, `publish = false` em todos os crates).
 5. ~~Repositório~~: resolvido. `github.com/mundotela/HiViewLinuxMicroscopio` (privado). O push é feito pela engenharia.

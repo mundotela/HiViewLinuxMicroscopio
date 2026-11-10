@@ -1,0 +1,15 @@
+[package]
+name = "hiview-buttond"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Privileged helper daemon that publishes Snap button events"
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true

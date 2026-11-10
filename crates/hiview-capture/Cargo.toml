@@ -1,0 +1,13 @@
+[package]
+name = "hiview-capture"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Video capture hardware layer for HiView (udev, GStreamer, V4L2)"
+
+[lints]
+workspace = true
+
+[dependencies]
