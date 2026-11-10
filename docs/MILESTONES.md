@@ -7,21 +7,25 @@
 
 ## Fluxo de trabalho
 
+O Devin roda como **Devin Local**, no editor do Devin, **na própria máquina alvo** (Pop!_OS do Henrique), com o microscópio conectado.
+
 ```
-Engenharia (Henrique + Claude)          Devin
+Engenharia (Henrique + Claude)          Devin Local
         │  prompt do milestone  ─────────►  │
-        │                                   │ branch m<N>-<slug>
-        │                                   │ implementa + testes
-        │                                   │ abre PR + relatório (DEVIN_REPORT_TEMPLATE.md)
+        │                                   │ branch local m<N>-<slug>
+        │                                   │ implementa + testes (inclusive no microscópio real)
+        │                                   │ relatório em docs/reports/M<N>.md + no chat
         │  ◄─────────────────── relatório   │
-        │ revisão de código + teste no hardware
-        ├── aprovado → merge → prompt do próximo milestone
+        │ revisão (git diff main...m<N>-<slug>) + teste no hardware
+        ├── aprovado → engenharia faz merge em main (+ push quando quiser) → próximo prompt
         └── ajustes  → prompt de correção (mesmo branch)
 ```
 
 **Regras:**
 
-- Um milestone = um branch = um PR.
+- Um milestone = um branch local = um relatório.
+- O Devin **não faz push, não abre PR e não faz merge**. Isso é papel da engenharia.
+- O Devin **nunca roda `sudo`/`apt`** nem altera arquivos fora da pasta do projeto. Se faltar um pacote do sistema, ele para e pede.
 - O Devin **não começa** o milestone seguinte sem aprovação explícita.
 - Se algo na arquitetura parecer errado ou impossível, o Devin **para e pergunta** no relatório, em vez de improvisar.
 - Itens "Fora de escopo" não devem ser implementados, mesmo que pareçam fáceis.
@@ -31,7 +35,7 @@ Engenharia (Henrique + Claude)          Devin
 - [ ] `cargo fmt --check` passa
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` passa
 - [ ] `cargo test --workspace` passa
-- [ ] CI verde
+- [ ] CI verde (verificado após o push. Até lá, o workflow precisa existir e os mesmos comandos precisam passar localmente)
 - [ ] Nenhum `unwrap()`/`expect()` fora de testes sem comentário `// INVARIANT:` justificando
 - [ ] `USER_MANUAL.md` atualizado nas seções afetadas
 - [ ] Relatório preenchido conforme o template
@@ -58,8 +62,8 @@ Engenharia (Henrique + Claude)          Devin
 **Critérios de aceite:**
 
 1. `cargo run -p hiview-app` abre a janela no Pop!_OS do Henrique.
-2. `scripts/check-env.sh` passa na máquina do Henrique e no ambiente do Devin. O relatório traz a saída dos dois.
-3. CI verde.
+2. `scripts/check-env.sh` passa. O relatório traz a saída completa.
+3. Workflow de CI criado em `.github/workflows/`. Ele será validado no primeiro push.
 
 **Teste no hardware (Henrique):** rodar o `check-env.sh` e abrir o app.
 
@@ -87,7 +91,8 @@ Engenharia (Henrique + Claude)          Devin
 3. A taxa estável fica ≥ 29 fps no indicador. O uso de CPU fica < 15% de um núcleo na máquina do Henrique.
 4. O teste de integração com `--source=test` roda no CI (pipeline sobe e chegam ≥ 30 frames em 2 s).
 
-**Teste no hardware (Henrique):** critérios 1–3. **Tarefa extra do Henrique:** gravar as fixtures (ver `ARCHITECTURE.md §8`).
+**Teste no hardware:** o Devin testa os critérios 1–3 no microscópio real. O Henrique confirma visualmente.
+**Fixtures:** o Devin grava `tests/fixtures/` a partir do microscópio (ver `ARCHITECTURE.md §8`). O Henrique posiciona os objetos (régua milimetrada, placa SMD, objeto comum) quando o Devin pedir.
 
 ---
 

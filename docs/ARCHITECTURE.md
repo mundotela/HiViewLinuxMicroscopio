@@ -88,7 +88,7 @@ A solução está na seção 6.10.
 
 - **SO:** Pop!_OS / Ubuntu 24.04 ou superior. Versões mínimas: **GTK 4.14, libadwaita 1.5, GStreamer 1.24**.
   - ✅ **Confirmado na máquina do Henrique (2026-11-10):** `libgtk-4-1 4.14.5`, `libadwaita-1-0 1.5.0`, `libgstreamer1.0-0 1.24.2`. Ou seja, a máquina está **exatamente no mínimo**. Features dos crates fixadas em `gtk4/v4_14` e `libadwaita/v1_5`. **Não usar APIs mais novas**, mesmo que o ambiente do Devin as tenha.
-- **Ambiente do Devin:** precisa ser Ubuntu 24.04+. No Ubuntu 22.04 o GTK é 4.6, o que **não serve**.
+- **Ambiente do Devin:** o Devin roda como **Devin Local na própria máquina alvo**. O ambiente de desenvolvimento é o ambiente de produção, então não há divergência de versões.
 - **Toolchain:** Rust stable, edition 2024.
 
 ---
@@ -327,13 +327,13 @@ Um arquivo de configuração inválido não pode derrubar o app: ele é renomead
 
 ## 8. Testabilidade sem hardware
 
-O Devin **não tem o microscópio**. Por isso:
+O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar no aparelho real. Mesmo assim, a CI e os testes automatizados **não podem depender de hardware**. Por isso:
 
 - **Fontes alternativas de captura** (flag de CLI `--source`):
   - `--source=device` (padrão): microscópio real.
   - `--source=test`: `videotestsrc pattern=ball`, em 640×480 YUY2 a 30 fps.
   - `--source=file:<caminho>`: reproduz em loop um vídeo de `tests/fixtures/` gravado do microscópio real.
-- **Fixtures reais:** o Henrique grava 5 s de vídeo e 3 fotos (régua milimetrada, placa SMD, objeto comum) e coloca em `tests/fixtures/`.
+- **Fixtures reais:** no M1, o Devin grava do microscópio 5 s de vídeo e 3 fotos (régua milimetrada, placa SMD, objeto comum; o Henrique posiciona os objetos) em `tests/fixtures/`. Arquivos pequenos: vídeo em MP4, menos de 5 MB no total.
 - **Testes unitários obrigatórios** em `hiview-core`:
   - parser do pacote de status (usando os bytes reais da seção 2.1);
   - `ViewTransform`;
@@ -342,7 +342,7 @@ O Devin **não tem o microscópio**. Por isso:
   - média de quadros;
   - carga de config inválida.
 - **Teste de integração do gravador:** grava 3 s de `videotestsrc` e valida com `gst-discoverer-1.0` (duração ≈ 3 s, H.264, 640×480).
-- **Testes em hardware:** feitos pelo Henrique, com o checklist de cada milestone.
+- **Testes em hardware:** executados pelo Devin no aparelho real. Testes que dependem de ação física (apertar o Snap, girar o anel, posicionar um objeto) são pedidos ao Henrique no relatório. A confirmação final é sempre do Henrique.
 
 ---
 
@@ -369,7 +369,7 @@ O Devin **não tem o microscópio**. Por isso:
 |---|---|---|---|
 | Código gtk-rs/Relm4 confuso gerado pelo agente | Média | Médio | `CONVENTIONS.md` rígido, revisão por milestone, componentes pequenos |
 | MP4 corrompido ao parar a gravação | Alta se ignorado | Alto | Sequência EOS obrigatória + teste de integração |
-| Ambiente do Devin com GTK antigo | Média | Alto | Verificação no M0; CI em ubuntu-24.04 |
+| Agente executando comandos na máquina do Henrique | Média | Alto | Proibido `sudo`/`apt` e escrita fora do projeto. Modo de bypass de permissões desligado no editor |
 | Uma mudança no `uvcvideo` passa a criar o input device | Baixa | Positivo | `EvdevSource` já previsto, com prioridade sobre o helper |
 | `usbmon` ausente ou bloqueado em algum kernel | Baixa | Baixo | Botão físico é opcional. Atalhos de teclado sempre funcionam |
 | Expectativa de "2 MP / 1600X" do usuário | Alta | Médio | Rótulos honestos + seção no manual |
@@ -400,4 +400,4 @@ O Devin **não tem o microscópio**. Por isso:
 2. Saída de `v4l2-ctl -d /dev/video2 --list-ctrls`.
 3. Os LEDs são controláveis por software? (Depende do item 2.)
 4. Licença do projeto (sugestão: GPL-3.0-or-later, compatível com `x264enc`).
-5. Repositório: GitHub privado? Nome do repositório?
+5. ~~Repositório~~: resolvido. `github.com/mundotela/HiViewLinuxMicroscopio` (privado). O push é feito pela engenharia.

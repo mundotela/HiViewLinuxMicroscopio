@@ -1,7 +1,7 @@
 # Relatório de Milestone — M<N>: <nome>
 
 > Preencha **todas** as seções. Se uma não se aplicar, escreva "N/A" e explique em uma linha.
-> Este relatório é o corpo do PR `M<N>: <nome>`.
+> Salve como `docs/reports/M<N>.md`, commite no branch do milestone e cole também no chat.
 
 ## 1. Resumo
 <!-- 3–5 linhas: o que foi entregue, em linguagem direta. -->
@@ -17,7 +17,7 @@
 - [ ] `cargo fmt --check`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo test --workspace` — <N> testes passando
-- [ ] CI verde — link:
+- [ ] CI: workflow criado / "pendente (sem push)"
 - [ ] Sem `unwrap`/`expect` não justificados
 - [ ] `USER_MANUAL.md` atualizado — seções:
 - [ ] Testado com `--source=test` / `--source=file:`

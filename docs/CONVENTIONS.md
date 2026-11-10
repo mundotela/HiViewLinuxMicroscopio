@@ -10,7 +10,7 @@
 | O quê | Idioma |
 |---|---|
 | Código, identificadores, comentários, mensagens de log | **Inglês** |
-| Mensagens de commit, nomes de branch, títulos de PR | **Inglês** |
+| Mensagens de commit, nomes de branch | **Inglês** |
 | Textos da interface (UI) | **Português do Brasil** |
 | Documentação em `docs/`, relatórios ao final de milestone | **Português do Brasil** |
 
@@ -149,20 +149,26 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 
 ---
 
-## 11. Git e PR
+## 11. Git e relatórios
 
-- Branch: `m<N>-<slug>` (ex.: `m1-live-capture`). Correções no mesmo branch até o merge.
+- Branch **local**: `m<N>-<slug>` (ex.: `m1-live-capture`), criado a partir de `main`. Correções no mesmo branch até o merge.
 - Commits no formato **Conventional Commits**: `feat(capture): add udev hotplug watcher`, `fix(app): ...`, `test(core): ...`, `docs: ...`, `chore: ...`.
   - Escopos: `core`, `capture`, `button`, `buttond`, `app`, `ci`, `docs`.
 - Commits pequenos e coerentes. Não junte refatoração com feature no mesmo commit.
-- PR com o título `M<N>: <nome do milestone>` e corpo = relatório (`DEVIN_REPORT_TEMPLATE.md`).
-- **Não faça merge sozinho.** A engenharia faz o merge após a aprovação.
+- Ao concluir: relatório em `docs/reports/M<N>.md` (seguindo `DEVIN_REPORT_TEMPLATE.md`), commitado no branch e também colado no chat.
+- **Proibido:** `git push`, abrir PR, fazer merge em `main`, reescrever histórico (`rebase`/`reset --hard`/`push --force`) de `main`. Tudo isso é papel da engenharia.
+
+## 11.1 Segurança na máquina local
+
+- **Nunca** rode `sudo`, `apt`, `pip install --user` ou qualquer comando que altere o sistema, nem escreva fora da pasta do projeto (exceção: `~/.cargo`, que o próprio cargo gerencia).
+- Se faltar um pacote do sistema, **pare e peça** no chat, informando o comando exato para o Henrique rodar.
+- Acesso ao microscópio (`/dev/video*`) é permitido. Não altere controles V4L2 de forma persistente fora do app.
 
 ---
 
 ## 12. Documentação
 
-- Toda mudança visível ao usuário atualiza `docs/USER_MANUAL.md` no mesmo PR.
+- Toda mudança visível ao usuário atualiza `docs/USER_MANUAL.md` no mesmo branch do milestone.
 - Mudança de arquitetura **não** é feita por iniciativa do Devin: ela é proposta no relatório. Se aprovada, a engenharia atualiza o `ARCHITECTURE.md`.
 - Itens públicos (`pub`) de bibliotecas têm doc comment `///` curto, em inglês.
 
