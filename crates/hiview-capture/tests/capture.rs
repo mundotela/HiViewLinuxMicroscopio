@@ -5,6 +5,7 @@
 //! the `FrameBus` without any hardware, and a generated Theora clip proves the
 //! file source path (decode + appsink). Both must run in CI.
 
+use std::sync::LazyLock;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -14,6 +15,10 @@ use hiview_capture::{
 };
 
 const TIMEOUT: Duration = Duration::from_secs(15);
+
+static GST_INIT: LazyLock<()> = LazyLock::new(|| {
+    hiview_capture::init().unwrap_or_else(|e| panic!("gst init: {e}"));
+});
 
 fn wait_for_frame(bus: &FrameBus) -> Option<hiview_capture::Frame> {
     let deadline = Instant::now() + TIMEOUT;
@@ -41,6 +46,7 @@ fn wait_for_streaming(rx: &mpsc::Receiver<CameraEvent>) -> bool {
 
 #[test]
 fn test_source_delivers_640x480_rgba_frames() {
+    LazyLock::force(&GST_INIT);
     let bus = FrameBus::default();
     let (tx, rx) = mpsc::channel();
 
@@ -77,7 +83,7 @@ fn file_source_decodes_and_delivers_frames() {
     std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("mkdir {}: {e}", dir.display()));
     let file = dir.join("sample.ogg");
 
-    hiview_capture::init().unwrap_or_else(|e| panic!("gst init: {e}"));
+    LazyLock::force(&GST_INIT);
     encode_clip(&file);
 
     let bus = FrameBus::default();
@@ -141,6 +147,7 @@ fn encode_clip(path: &std::path::Path) {
 #[test]
 #[ignore = "requires microscope"]
 fn microscope_is_discovered_and_streams() {
+    LazyLock::force(&GST_INIT);
     let cameras = enumerate().unwrap_or_else(|e| panic!("enumerate: {e}"));
     let microscope = cameras
         .iter()
