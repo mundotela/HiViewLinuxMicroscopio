@@ -3,6 +3,8 @@ name = "hiview-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+publish = false
 description = "Pure domain logic for HiView (no GTK/GStreamer)"
 
 [lints]

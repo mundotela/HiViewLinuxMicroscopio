@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 MundoTela Tecnologia
+
 //! Privileged helper daemon: reads /dev/usbmonN, filters the Snap button
 //! status endpoint of the microscope and publishes events on a Unix socket.
 //!

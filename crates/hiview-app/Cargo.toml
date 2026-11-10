@@ -3,6 +3,8 @@ name = "hiview-app"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+publish = false
 description = "HiView desktop application (GTK4/libadwaita/Relm4)"
 
 [lints]

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 MundoTela Tecnologia
+
 //! Root application component.
 
 use relm4::adw::prelude::*;

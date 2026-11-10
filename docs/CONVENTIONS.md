@@ -81,6 +81,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
     services/          (photo.rs, gallery.rs ...)
     overlay/           (renderer.rs, tools/)
   ```
+- Todo arquivo `.rs` começa com o cabeçalho SPDX: `// SPDX-License-Identifier: GPL-3.0-or-later` e `// Copyright (C) 2026 MundoTela Tecnologia`.
 
 ---
 

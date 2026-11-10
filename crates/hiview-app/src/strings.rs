@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 MundoTela Tecnologia
+
 //! All user-visible strings, in Brazilian Portuguese (docs/CONVENTIONS.md §1).
 //! Centralized here to ease future localization.
 

@@ -72,4 +72,4 @@ crates/
 
 ## Licença
 
-A definir pela engenharia (ver `docs/ARCHITECTURE.md` §12).
+HiView é software livre, licenciado sob a GNU GPL v3 ou posterior. Veja LICENSE.

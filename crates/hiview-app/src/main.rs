@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 MundoTela Tecnologia
+
 //! hiview — HiView desktop application.
 //!
 //! This file contains only the CLI parsing, the logging setup and the Relm4
