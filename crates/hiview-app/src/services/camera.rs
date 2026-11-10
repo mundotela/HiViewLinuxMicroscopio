@@ -36,6 +36,14 @@ fn selected_for<'a>(
     }
 }
 
+/// Whether a pipeline bus error means the device was physically removed
+/// rather than a real failure (CONVENTIONS §6: `error` only for failures
+/// the user perceives). The `v4l2src` poll error fires as soon as the node
+/// dies, usually before the udev remove event arrives.
+fn is_disconnect_error(detail: &str) -> bool {
+    detail.contains("poll error") || detail.contains("ENODEV") || detail.contains("ENOENT")
+}
+
 /// Whether cameras come from hardware discovery or a fixed CLI source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -147,9 +155,20 @@ impl CameraService {
                 }
             }
             CameraEvent::Error(detail) => {
-                error!("capture pipeline error: {detail}");
-                self.pipeline = None;
-                self.state = self.fallback_state();
+                let device_gone = self
+                    .pipeline
+                    .as_ref()
+                    .and_then(|p| p.dev_node())
+                    .is_some_and(|n| !self.cameras.iter().any(|c| &c.dev_node == n));
+                if self.mode == Mode::Device && (device_gone || is_disconnect_error(&detail)) {
+                    debug!("capture ended by device removal: {detail}");
+                    self.pipeline = None;
+                    self.state = CameraState::Disconnected;
+                } else {
+                    error!("capture pipeline error: {detail}");
+                    self.pipeline = None;
+                    self.state = self.fallback_state();
+                }
             }
         }
     }
@@ -222,6 +241,14 @@ impl CameraService {
         if in_use {
             warn!("active camera {} was disconnected", desc.dev_node.display());
             self.pipeline = None;
+        }
+        // A disconnect error may already have dropped the pipeline; the
+        // selected device being gone still means Disconnected.
+        let selected_removed = match &self.selection {
+            Selection::Auto => desc.is_microscope,
+            Selection::Manual(key) => desc.stable_id() == *key,
+        };
+        if in_use || (self.pipeline.is_none() && selected_removed) {
             self.state = CameraState::Disconnected;
         }
     }
