@@ -1,0 +1,16 @@
+[package]
+name = "hiview-app"
+version.workspace = true
+edition.workspace = true
+description = "HiView desktop application (GTK4/libadwaita/Relm4)"
+
+[lints]
+workspace = true
+
+[dependencies]
+gtk.workspace = true
+adw.workspace = true
+relm4.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
