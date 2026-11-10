@@ -45,6 +45,10 @@ pub struct CameraDescriptor {
     pub usb_vid: Option<u16>,
     /// USB product ID of the parent device, when it is a USB camera.
     pub usb_pid: Option<u16>,
+    /// udev `ID_PATH` of the device (e.g. `pci-0000:00:14.0-usb-0:5:1.0`).
+    /// Identifies the physical device/port and survives `/dev/videoN`
+    /// renumbering across replugs.
+    pub usb_path: Option<String>,
     /// Whether the USB identity matches a known microscope.
     pub is_microscope: bool,
     /// Capture modes advertised by the device (may be empty on unplug).
@@ -52,6 +56,15 @@ pub struct CameraDescriptor {
 }
 
 impl CameraDescriptor {
+    /// Stable identifier for the physical device: `ID_PATH` when available,
+    /// otherwise the device node (stable only until the next replug).
+    #[must_use]
+    pub fn stable_id(&self) -> String {
+        self.usb_path
+            .clone()
+            .unwrap_or_else(|| self.dev_node.to_string_lossy().into_owned())
+    }
+
     /// Short technical description for logging.
     #[must_use]
     pub fn summary(&self) -> String {
@@ -208,6 +221,7 @@ fn describe_unplugged(node: &Path, dev: &udev::Device) -> CameraDescriptor {
         is_microscope: vid
             .zip(pid)
             .is_some_and(|(v, p)| hiview_core::is_known_microscope(v, p)),
+        usb_path: usb_path(dev),
         modes: Vec::new(),
     }
 }
@@ -234,6 +248,7 @@ fn describe(
         is_microscope: vid
             .zip(pid)
             .is_some_and(|(v, p)| hiview_core::is_known_microscope(v, p)),
+        usb_path: usb_path(dev),
         modes: probe.modes.clone(),
     })
 }
@@ -242,6 +257,19 @@ fn product_name(dev: &udev::Device) -> Option<String> {
     dev.property_value("ID_V4L_PRODUCT")
         .or_else(|| dev.property_value("ID_MODEL"))
         .map(|s| s.to_string_lossy().into_owned())
+}
+
+/// Stable per-port path (`ID_PATH`) of a video4linux udev device, falling
+/// back to the USB parent's sysfs path.
+fn usb_path(dev: &udev::Device) -> Option<String> {
+    dev.property_value("ID_PATH")
+        .map(|s| s.to_string_lossy().into_owned())
+        .or_else(|| {
+            dev.parent_with_subsystem_devtype("usb", "usb_device")
+                .ok()
+                .flatten()
+                .map(|usb| usb.syspath().to_string_lossy().into_owned())
+        })
 }
 
 /// Extracts `(vid, pid)` from a video4linux udev device or its USB parent.

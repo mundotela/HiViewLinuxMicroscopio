@@ -4,7 +4,6 @@
 //! Camera service: owns discovery, hotplug monitoring and the capture
 //! pipeline, and drives the camera state machine (docs/ARCHITECTURE.md §6.3).
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use hiview_capture::{
@@ -20,8 +19,21 @@ use crate::cli::Source;
 pub enum Selection {
     /// Prefer a known microscope; nothing starts without one.
     Auto,
-    /// A specific device node chosen in the menu.
-    Manual(PathBuf),
+    /// A specific physical camera, keyed by its stable id (udev `ID_PATH`),
+    /// so the selection survives `/dev/videoN` renumbering on replug.
+    Manual(String),
+}
+
+/// Resolves a selection to a camera in the current list (pure logic,
+/// unit-tested).
+fn selected_for<'a>(
+    selection: &Selection,
+    cameras: &'a [CameraDescriptor],
+) -> Option<&'a CameraDescriptor> {
+    match selection {
+        Selection::Auto => cameras.iter().find(|c| c.is_microscope),
+        Selection::Manual(key) => cameras.iter().find(|c| c.stable_id() == *key),
+    }
 }
 
 /// Whether cameras come from hardware discovery or a fixed CLI source.
@@ -108,12 +120,12 @@ impl CameraService {
         &self.frame_bus
     }
 
-    /// Menu target identifying the current selection (`"auto"` or a devnode).
+    /// Menu target identifying the current selection (`"auto"` or a stable id).
     #[must_use]
     pub fn selection_target(&self) -> String {
         match &self.selection {
             Selection::Auto => "auto".into(),
-            Selection::Manual(node) => node.to_string_lossy().into_owned(),
+            Selection::Manual(key) => key.clone(),
         }
     }
 
@@ -142,7 +154,7 @@ impl CameraService {
         }
     }
 
-    /// Handles a camera menu selection (`"auto"` or a device node path).
+    /// Handles a camera menu selection (`"auto"` or a camera stable id).
     pub fn select(&mut self, target: &str) {
         if self.mode != Mode::Device {
             return;
@@ -150,7 +162,7 @@ impl CameraService {
         self.selection = if target == "auto" {
             Selection::Auto
         } else {
-            Selection::Manual(PathBuf::from(target))
+            Selection::Manual(target.to_string())
         };
         info!("camera selection changed to {target}");
 
@@ -184,10 +196,7 @@ impl CameraService {
         if self.pipeline.is_some() || self.mode != Mode::Device {
             return;
         }
-        let target = match &self.selection {
-            Selection::Auto => self.cameras.iter().find(|c| c.is_microscope),
-            Selection::Manual(node) => self.cameras.iter().find(|c| &c.dev_node == node),
-        };
+        let target = selected_for(&self.selection, &self.cameras);
         if let Some(desc) = target {
             info!("starting capture on {}", desc.summary());
             self.restart(CaptureSource::Device(desc.clone()));
@@ -222,14 +231,63 @@ impl CameraService {
         if self.mode != Mode::Device {
             return CameraState::Error;
         }
-        let selected_present = match &self.selection {
-            Selection::Auto => self.cameras.iter().any(|c| c.is_microscope),
-            Selection::Manual(node) => self.cameras.iter().any(|c| &c.dev_node == node),
-        };
-        if selected_present {
+        if selected_for(&self.selection, &self.cameras).is_some() {
             CameraState::Error
         } else {
             CameraState::Disconnected
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use hiview_capture::CameraDescriptor;
+
+    fn fake_camera(node: &str, usb_path: &str) -> CameraDescriptor {
+        CameraDescriptor {
+            dev_node: PathBuf::from(node),
+            name: "Fake Cam".into(),
+            usb_vid: Some(0x1111),
+            usb_pid: Some(0x2222),
+            usb_path: Some(usb_path.into()),
+            is_microscope: false,
+            modes: Vec::new(),
+        }
+    }
+
+    /// After a replug the kernel may hand out different /dev/videoN nodes;
+    /// a manual selection must still resolve to the same physical device.
+    #[test]
+    fn manual_selection_follows_usb_path_when_nodes_swap() {
+        let before = vec![
+            fake_camera("/dev/video0", "pci-usb-0:5"),
+            fake_camera("/dev/video2", "pci-usb-0:6"),
+        ];
+        let selection = Selection::Manual("pci-usb-0:6".into());
+        let picked = selected_for(&selection, &before)
+            .unwrap_or_else(|| panic!("camera B missing before swap"));
+        assert_eq!(picked.dev_node, PathBuf::from("/dev/video2"));
+
+        let after = vec![
+            fake_camera("/dev/video4", "pci-usb-0:6"),
+            fake_camera("/dev/video6", "pci-usb-0:5"),
+        ];
+        let picked = selected_for(&selection, &after)
+            .unwrap_or_else(|| panic!("camera B missing after swap"));
+        assert_eq!(picked.dev_node, PathBuf::from("/dev/video4"));
+        assert_eq!(picked.usb_path.as_deref(), Some("pci-usb-0:6"));
+    }
+
+    #[test]
+    fn auto_selection_prefers_the_microscope() {
+        let mut microscope = fake_camera("/dev/video2", "pci-usb-0:5");
+        microscope.is_microscope = true;
+        let cameras = vec![fake_camera("/dev/video0", "pci-usb-0:6"), microscope];
+        let picked = selected_for(&Selection::Auto, &cameras)
+            .unwrap_or_else(|| panic!("microscope not selected"));
+        assert_eq!(picked.dev_node, PathBuf::from("/dev/video2"));
     }
 }
