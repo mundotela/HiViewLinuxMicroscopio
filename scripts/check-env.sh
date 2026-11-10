@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # check-env.sh — verify that the build environment meets HiView's minimums.
 # Minimums (docs/ARCHITECTURE.md §4): GTK 4.14, libadwaita 1.5, GStreamer 1.24.
-# Rust: edition 2024 requires >= 1.85.
+# The rustc minimum is read from `rust-version` in the workspace Cargo.toml
+# (single source of truth), not hardcoded here.
 #
 # echo/printf are allowed here by convention (docs/CONVENTIONS.md §6).
 
 set -euo pipefail
 
-MIN_RUSTC="1.85"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+MIN_RUSTC="$(sed -n 's/^rust-version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$REPO_ROOT/Cargo.toml" | head -n1)"
+if [ -z "$MIN_RUSTC" ]; then
+    echo "ERRO: rust-version não encontrado em $REPO_ROOT/Cargo.toml" >&2
+    exit 1
+fi
 MIN_GTK="4.14"
 MIN_ADW="1.5"
 MIN_GST="1.24"

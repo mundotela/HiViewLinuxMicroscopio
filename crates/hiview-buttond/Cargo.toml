@@ -2,6 +2,7 @@
 name = "hiview-buttond"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Privileged helper daemon that publishes Snap button events"
 
 [lints]

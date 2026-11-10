@@ -2,6 +2,7 @@
 name = "hiview-capture"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "Video capture hardware layer for HiView (udev, GStreamer, V4L2)"
 
 [lints]
