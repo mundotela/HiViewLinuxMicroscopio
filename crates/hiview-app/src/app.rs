@@ -253,8 +253,8 @@ impl AppModel {
 
     /// Rebuilds the camera selection menu from the current camera list.
     fn rebuild_menu(&mut self) {
-        let menu = gio::Menu::new();
-        menu.append_item(
+        let cameras_menu = gio::Menu::new();
+        cameras_menu.append_item(
             &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
                 strings::CAMERA_AUTO_LABEL,
                 &AUTO_TARGET.to_string(),
@@ -266,13 +266,15 @@ impl AppModel {
             } else {
                 format!("{} ({})", camera.name, camera.dev_node.display())
             };
-            menu.append_item(
+            cameras_menu.append_item(
                 &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
                     &label,
                     &camera.dev_node.to_string_lossy().to_string(),
                 ),
             );
         }
+        let menu = gio::Menu::new();
+        menu.append_submenu(Some(strings::CAMERA_SUBMENU_LABEL), &cameras_menu);
         self.menu_model = menu;
     }
 

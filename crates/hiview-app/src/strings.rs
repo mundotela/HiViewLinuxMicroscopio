@@ -44,5 +44,8 @@ pub const CAMERA_MENU_TOOLTIP: &str = "Escolher câmera";
 /// Menu item that restores automatic microscope detection.
 pub const CAMERA_AUTO_LABEL: &str = "Automático";
 
+/// Title of the camera submenu (docs/USER_MANUAL.md).
+pub const CAMERA_SUBMENU_LABEL: &str = "Câmera";
+
 /// Menu label for the known microscope.
-pub const MICROSCOPE_LABEL: &str = "Microscópio USB";
+pub const MICROSCOPE_LABEL: &str = "Microscópio (05e3:f12a)";
