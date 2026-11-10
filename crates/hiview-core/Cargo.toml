@@ -1,0 +1,10 @@
+[package]
+name = "hiview-core"
+version.workspace = true
+edition.workspace = true
+description = "Pure domain logic for HiView (no GTK/GStreamer)"
+
+[lints]
+workspace = true
+
+[dependencies]

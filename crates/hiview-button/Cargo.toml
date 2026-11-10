@@ -1,0 +1,10 @@
+[package]
+name = "hiview-button"
+version.workspace = true
+edition.workspace = true
+description = "Physical Snap button abstraction for HiView"
+
+[lints]
+workspace = true
+
+[dependencies]
