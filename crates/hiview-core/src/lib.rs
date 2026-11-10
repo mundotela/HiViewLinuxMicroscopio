@@ -7,5 +7,9 @@
 //! This crate must not depend on GTK or GStreamer (docs/ARCHITECTURE.md §5).
 
 mod devices;
+mod orientation;
+mod view;
 
 pub use devices::{KNOWN_MICROSCOPES, KnownMicroscope, is_known_microscope};
+pub use orientation::{Orientation, ViewOrientation};
+pub use view::{MAX_SCALE, MIN_SCALE, NEAREST_FILTER_SCALE, Point, Size, ViewMode, ViewTransform};
