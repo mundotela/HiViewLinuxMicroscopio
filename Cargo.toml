@@ -18,10 +18,17 @@ expect_used = "warn"
 # System libraries are pinned at the minimums: GTK 4.14.5, libadwaita 1.5.0,
 # GStreamer 1.24.2 (docs/ARCHITECTURE.md §4). Never enable newer API features.
 [workspace.dependencies]
+hiview-core = { path = "crates/hiview-core" }
+hiview-capture = { path = "crates/hiview-capture" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 # gnome_46 = gtk/v4_14 + adw/v1_5 + gio 2.80: exactly the system stack.
 relm4 = { version = "0.11", features = ["gnome_46", "libadwaita"] }
+gst = { package = "gstreamer", version = "0.25", features = ["v1_24"], default-features = false }
+gst-app = { package = "gstreamer-app", version = "0.25", features = ["v1_24"], default-features = false }
+gst-video = { package = "gstreamer-video", version = "0.25", features = ["v1_24"], default-features = false }
+udev = "0.9"
+thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

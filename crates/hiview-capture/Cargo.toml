@@ -11,3 +11,10 @@ description = "Video capture hardware layer for HiView (udev, GStreamer, V4L2)"
 workspace = true
 
 [dependencies]
+hiview-core.workspace = true
+gst.workspace = true
+gst-app.workspace = true
+gst-video.workspace = true
+udev.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
