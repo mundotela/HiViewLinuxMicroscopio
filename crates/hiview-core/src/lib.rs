@@ -5,4 +5,7 @@
 //! frame processing, file naming and the UVC status packet parser.
 //!
 //! This crate must not depend on GTK or GStreamer (docs/ARCHITECTURE.md §5).
-//! Contents are added starting in M1/M2; intentionally empty for now.
+
+mod devices;
+
+pub use devices::{KNOWN_MICROSCOPES, KnownMicroscope, is_known_microscope};
