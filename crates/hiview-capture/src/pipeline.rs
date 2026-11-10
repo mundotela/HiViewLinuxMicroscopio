@@ -133,11 +133,18 @@ fn caps_filter(caps: gst::Caps) -> Result<gst::Element, Error> {
     Ok(filter)
 }
 
+/// First frames a V4L2 device delivers are uninitialized driver buffers
+/// (solid-color garbage; observed on the 05e3:f12a microscope). Skipping a
+/// few keeps garbage off the live view and out of future snapshots (M3).
+const DEVICE_WARMUP_FRAMES: u64 = 3;
+
 /// `sync` paces delivery to buffer timestamps. It must stay off for live
 /// sources: the device already paces capture, and syncing a 4-buffer appsink
 /// queue overflows it and drops ~40% of frames. For files it keeps decode at
 /// playback speed instead of max CPU.
-fn build_appsink(frame_bus: &FrameBus, sync: bool) -> gst_app::AppSink {
+///
+/// `skip_first` discards that many initial samples (device warmup frames).
+fn build_appsink(frame_bus: &FrameBus, sync: bool, skip_first: u64) -> gst_app::AppSink {
     let rgba = gst::Caps::builder("video/x-raw")
         .field("format", "RGBA")
         .build();
@@ -150,21 +157,28 @@ fn build_appsink(frame_bus: &FrameBus, sync: bool) -> gst_app::AppSink {
         .build();
 
     let bus = frame_bus.clone();
+    let sample_count = std::sync::atomic::AtomicU64::new(0);
     appsink.set_callbacks(
         gst_app::AppSinkCallbacks::builder()
             .new_preroll(|sink| {
                 let _ = sink.pull_preroll();
                 Ok(gst::FlowSuccess::Ok)
             })
-            .new_sample(move |sink| match extract_frame(sink) {
-                Ok(Some(frame)) => {
-                    bus.publish(frame);
-                    Ok(gst::FlowSuccess::Ok)
+            .new_sample(move |sink| {
+                if sample_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < skip_first {
+                    let _ = sink.pull_sample();
+                    return Ok(gst::FlowSuccess::Ok);
                 }
-                Ok(None) => Ok(gst::FlowSuccess::Ok),
-                Err(err) => {
-                    warn!("dropping undecodable sample: {err}");
-                    Ok(gst::FlowSuccess::Ok)
+                match extract_frame(sink) {
+                    Ok(Some(frame)) => {
+                        bus.publish(frame);
+                        Ok(gst::FlowSuccess::Ok)
+                    }
+                    Ok(None) => Ok(gst::FlowSuccess::Ok),
+                    Err(err) => {
+                        warn!("dropping undecodable sample: {err}");
+                        Ok(gst::FlowSuccess::Ok)
+                    }
                 }
             })
             .build(),
@@ -205,7 +219,11 @@ fn extract_frame(sink: &gst_app::AppSink) -> Result<Option<Frame>, String> {
 fn build_pipeline(source: &CaptureSource, frame_bus: &FrameBus) -> Result<gst::Pipeline, Error> {
     let pipeline = gst::Pipeline::builder().name("hiview-capture").build();
     let sync = matches!(source, CaptureSource::File(_));
-    let appsink = build_appsink(frame_bus, sync).upcast::<gst::Element>();
+    let skip_first = match source {
+        CaptureSource::Device(_) => DEVICE_WARMUP_FRAMES,
+        _ => 0,
+    };
+    let appsink = build_appsink(frame_bus, sync, skip_first).upcast::<gst::Element>();
     let convert = make("videoconvert")?;
 
     match source {
