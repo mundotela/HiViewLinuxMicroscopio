@@ -92,7 +92,7 @@ Engenharia (Henrique + Claude)          Devin Local
 4. O teste de integração com `--source=test` roda no CI (pipeline sobe e chegam ≥ 30 frames em 2 s).
 
 **Teste no hardware:** o Devin testa os critérios 1–3 no microscópio real. O Henrique confirma visualmente.
-**Fixtures:** o Devin grava `tests/fixtures/` a partir do microscópio (ver `ARCHITECTURE.md §8`). O Henrique posiciona os objetos (régua milimetrada, placa SMD, objeto comum) quando o Devin pedir.
+**Fixtures:** o Devin grava `tests/fixtures/` a partir do microscópio (ver `ARCHITECTURE.md §8`). O Henrique posiciona os objetos quando o Devin pedir: lâmina de calibração (cruz DIV = 0,1 mm enquadrada), placa SMD e um objeto comum.
 
 ---
 
@@ -210,9 +210,13 @@ Engenharia (Henrique + Claude)          Devin Local
 
 **Critérios de aceite:**
 
-1. Com uma régua milimetrada: calibrar em 1 mm e medir 2 mm resulta em 2,00 mm ± a incerteza mostrada.
-2. Medida horizontal × vertical da mesma régua: diferença < 2%.
-3. Medidas funcionam também com o quadro congelado e com zoom.
+Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
+
+1. Calibrar com 10 divisões do eixo horizontal da cruz (1,0 mm) e medir 5 divisões: resultado 0,50 mm ± a incerteza mostrada.
+2. Com a mesma calibração, medir 10 divisões do eixo **vertical**: diferença < 2% em relação ao horizontal (verifica pixel quadrado).
+3. Ferramenta círculo no círculo de 500 µm: resultado entre 450 e 550 µm (a impressão da lâmina tem tolerância própria).
+4. Régua sobre a espessura da linha de 0,2 mm: resultado entre 0,17 e 0,23 mm.
+5. Medidas funcionam também com o quadro congelado e com zoom.
 
 ---
 

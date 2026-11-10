@@ -246,12 +246,12 @@ appsrc name=src is-live=true format=time caps=video/x-raw,format=RGBA,width=W,he
 - **Mira:** central, nos estilos cruz, cruz com círculo e cruz com escala.
 - **Medição (modo Bancada):** régua (distância entre 2 pontos), ângulo (3 pontos) e círculo (diâmetro). Ficam visíveis até serem apagadas. Esc cancela a medição em curso.
 - **Calibração:**
-  1. O usuário fotografa uma régua ou escala conhecida.
+  1. O usuário coloca sob a lente uma escala conhecida. Referência do projeto: **lâmina de calibração "Microscope Micrometer Calibration Ruler"**, que tem cruz com DIV = 0,1 mm nos dois eixos, grade 0,1 × 0,1 mm, linhas de 0,03/0,05/0,07/0,1/0,2 mm, círculos de 100 a 1000 µm e régua de 40 mm. Uma régua milimetrada comum também serve, com menos precisão.
   2. Desenha uma linha sobre ela e informa a distância real (em mm).
   3. O app calcula `px_por_mm` e salva um **perfil nomeado** (ex.: "Anel no máximo").
 - **Incerteza exibida:** ±1 px convertido para µm. A 640×480 isso é relevante e precisa aparecer.
 - **Aviso permanente** no modo Bancada quando há calibração ativa: "Válida apenas se o anel de ampliação e a altura não mudaram desde a calibração".
-- Pressupõe pixels quadrados. Isso é verificado no teste de aceitação do M8 (medida horizontal × vertical da mesma régua, diferença < 2%).
+- Pressupõe pixels quadrados. Isso é verificado no teste de aceitação do M8 (medida horizontal × vertical da cruz da lâmina, diferença < 2%).
 
 ### 6.10 Subsistema do botão físico
 
@@ -333,7 +333,7 @@ O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar n
   - `--source=device` (padrão): microscópio real.
   - `--source=test`: `videotestsrc pattern=ball`, em 640×480 YUY2 a 30 fps.
   - `--source=file:<caminho>`: reproduz em loop um vídeo de `tests/fixtures/` gravado do microscópio real.
-- **Fixtures reais:** no M1, o Devin grava do microscópio 5 s de vídeo e 3 fotos (régua milimetrada, placa SMD, objeto comum; o Henrique posiciona os objetos) em `tests/fixtures/`. Arquivos pequenos: vídeo em MP4, menos de 5 MB no total.
+- **Fixtures reais:** no M1, o Devin grava do microscópio 5 s de vídeo e 3 fotos (lâmina de calibração enquadrando a cruz DIV = 0,1 mm, placa SMD, objeto comum; o Henrique posiciona os objetos) em `tests/fixtures/`. Arquivos pequenos: vídeo em MP4, menos de 5 MB no total.
 - **Testes unitários obrigatórios** em `hiview-core`:
   - parser do pacote de status (usando os bytes reais da seção 2.1);
   - `ViewTransform`;
