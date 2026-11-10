@@ -184,16 +184,18 @@ Engenharia (Henrique + Claude)          Devin Local
 
 ---
 
-## M7 — Ajustes de imagem (V4L2)
+## M7 — Ajustes de imagem (por software)
 
-**Pré-requisito:** o Henrique envia a saída de `v4l2-ctl --list-ctrls`.
+O microscópio não tem controles V4L2. Os ajustes são feitos no pipeline (`ARCHITECTURE.md §6.11`).
 
-**Escopo:** controles dinâmicos (§6.11) no painel Bancada (e um subconjunto simples — brilho e contraste — no Explorar), com restaurar padrões e persistência por dispositivo.
+**Escopo:** brilho, contraste, saturação, gama e nitidez no painel Bancada (no Explorar, só brilho e contraste), com restaurar padrões e persistência por dispositivo.
 
 **Critérios de aceite:**
 
-1. Todos os controles listados pelo `v4l2-ctl` aparecem e funcionam.
-2. Os valores são reaplicados ao reconectar.
+1. Cada ajuste altera a imagem ao vivo, sem travar e sem cair abaixo de 29 fps.
+2. Foto (M3) e vídeo (M4) saem com os ajustes aplicados, iguais à tela.
+3. Com tudo no padrão, o uso de CPU fica igual ao do M1 (±2 pontos percentuais).
+4. Os valores são reaplicados ao reconectar e ao reabrir o app.
 
 ---
 

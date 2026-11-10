@@ -35,7 +35,9 @@ Medições feitas na máquina de desenvolvimento (Pop!_OS, kernel `7.1.5-7607010
 | Taxas | 30 fps e 5 fps | 30 fps é o padrão. 5 fps fica reservado (timelapse, no futuro) |
 | "2.0 MP" / "1600X" | Marketing: interpolação/ampliação digital | Resolução maior só por interpolação, **sempre rotulada como tal** |
 | Anel de ampliação/foco | Mecânico, sem leitura por software | Zoom do app é só digital. Calibração de medição fica inválida quando o anel é mexido |
-| LEDs | Controle por roda no cabo (provavelmente analógico, **a confirmar**) | Sem controle de LED no software, a menos que `--list-ctrls` mostre o contrário |
+| Controles V4L2 | **Nenhum** (`v4l2-ctl --list-ctrls` vazio, confirmado em 2026-11-10) | Brilho/contraste/etc. só por software (§6.11). LEDs só pela roda do cabo |
+| Primeiros quadros | O 1º quadro após abrir o dispositivo vem corrompido (buffer não inicializado) | O pipeline descarta os 3 primeiros quadros de fontes de dispositivo antes do FrameBus |
+| Decodificador H.264 no sistema | Só `openh264dec`, que lê **apenas constrained-baseline** | Toda gravação usa perfil constrained-baseline (§6.7) |
 | Endpoint de status | `EP 0x83 IN`, Interrupt | Canal do botão Snap |
 | Descritor de still | `bStillCaptureMethod=2`, `bTriggerSupport=1`, `bTriggerUsage=0` | Ver seção 2.1 |
 
@@ -71,7 +73,7 @@ A solução está na seção 6.10.
 |---|---|---|
 | ADR-001 | **Rust em todo o projeto** | Uma linguagem só, binário único, segurança de memória, bom suporte a GStreamer/GTK |
 | ADR-002 | **GTK4 + libadwaita + Relm4** na interface | Visual nativo e moderno no GNOME/Pop!_OS. O Relm4 impõe uma estrutura de componentes e mensagens que limita código bagunçado |
-| ADR-003 | **GStreamer** para captura e gravação. Controles V4L2 pelo crate `v4l` | Pipeline maduro, encoder H.264 pronto, MP4 correto |
+| ADR-003 | **GStreamer** para captura, gravação, sondagem de formatos (`DeviceMonitor`) e ajustes de imagem. **Sem crate `v4l`** (decisão do M1) | Pipeline maduro, encoder H.264 pronto, MP4 correto. O `v4l` exigiria libclang e não traria nada, já que o aparelho não tem controles |
 | ADR-004 | Dispositivo identificado por **VID:PID via udev**, com hotplug | Os nós `/dev/videoN` mudam, e o nome V4L2 é genérico |
 | ADR-005 | Frames chegam à aplicação por **`appsink` em RGBA**, e não por `gtk4paintablesink` | Congelar, foto, empilhamento e medição precisam de acesso ao frame. 640×480×4 B a 30 fps ≈ 37 MB/s, custo irrelevante |
 | ADR-006 | Gravação num **pipeline separado alimentado por `appsrc`** | Evita adicionar e remover ramos de `tee` dinamicamente, a fonte nº 1 de bugs com GStreamer. Encerramento controlado por EOS |
@@ -133,7 +135,7 @@ hiview/
 │ v4l2src→caps→videoconvert→videoflip→appsink      │        └─────────────┬───────────────────┘
 │            │                                     │                      │ unix socket
 │         FrameBus ──► Recorder (appsrc→x264→mp4)  │        ┌─────────────┴─────── hiview-buttond (root) ┐
-│ V4l2Controls (crate v4l, fd separado)            │        │ /dev/usbmonN → filtro → eventos            │
+│ ImageAdjust (videobalance/gamma/nitidez)         │        │ /dev/usbmonN → filtro → eventos            │
 └──────────────────────────────────────────────────┘        └────────────────────────────────────────────┘
 ```
 
@@ -155,12 +157,16 @@ hiview/
 v4l2src device=<dev_node> do-timestamp=true
   ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1
   ! videoconvert
+  ! videobalance name=balance            (brilho, contraste, saturação — §6.11)
+  ! gamma name=gamma                     (gama — §6.11)
+  ! [nitidez opcional — §6.11]
+  ! videoconvert
   ! video/x-raw,format=RGBA
   ! videoflip name=flip video-direction=identity
   ! appsink name=sink sync=false max-buffers=1 drop=true emit-signals=false
 ```
 
-- As caps vêm de `CaptureMode`, construído a partir do que o dispositivo anuncia (`VIDIOC_ENUM_FMT`). **Nada fica fixo no código além do padrão.**
+- As caps vêm de `CaptureMode`, construído a partir do que o dispositivo anuncia (sondado pelo `gst::DeviceMonitor`). **Nada fica fixo no código além do padrão.**
 - Callback `new-sample` (thread de streaming do GStreamer): copia o buffer para um `Frame` e publica no `FrameBus`.
 - `Frame { seq: u64, pts: gst::ClockTime, width: u32, height: u32, stride: u32, data: glib::Bytes }`, sempre RGBA8.
 - O **bus** do pipeline é observado. `Error` derruba o estado para `CameraState::Error(msg)` e leva o pipeline a `Null`. Sem `panic`.
@@ -191,6 +197,7 @@ Searching ──found──► Starting ──PLAYING──► Streaming
 
 ### 6.5 Viewport (`hiview-app::widgets::viewport`)
 
+- No M1, a viewport é provisoriamente um `gtk::Picture` (só "ajustar à janela"). **A partir do M2**, ela passa a ser o widget próprio descrito abaixo.
 - Widget próprio (subclasse de `gtk::Widget`) que implementa `snapshot()`:
   1. `gdk::MemoryTexture` criado do `Frame` (`MemoryFormat::R8g8b8a8`, sem cópia graças ao `glib::Bytes`).
   2. `snapshot.append_scaled_texture(texture, filter, bounds)`: filtro **Linear** abaixo de 200% e **Nearest** a partir de 200%, para ver pixel por pixel em inspeção. Configurável.
@@ -221,10 +228,12 @@ Searching ──found──► Starting ──PLAYING──► Streaming
 appsrc name=src is-live=true format=time caps=video/x-raw,format=RGBA,width=W,height=H,framerate=30/1
   ! videoconvert ! video/x-raw,format=I420
   ! x264enc tune=zerolatency speed-preset=veryfast bitrate=2500
+  ! video/x-h264,profile=constrained-baseline
   ! h264parse ! mp4mux ! filesink location=<arquivo>.mp4
 ```
 
-- **Encoder:** `x264enc` (gstreamer1.0-plugins-ugly). Fallback em tempo de execução para `openh264enc`. Se nenhum existir, o botão de gravar fica desabilitado, com explicação.
+- **Perfil obrigatório: constrained-baseline.** O único decodificador H.264 do sistema (`openh264dec`) não lê outros perfis. Sem isso, os vídeos não abririam no Totem nem gerariam miniatura na galeria (M5). O teste de integração do M4 deve decodificar o arquivo gravado com `openh264dec`.
+- **Encoder:** `x264enc` (gstreamer1.0-plugins-ugly). Fallback em tempo de execução para `openh264enc`, que já gera baseline. Se nenhum existir, o botão de gravar fica desabilitado, com explicação.
 - **PTS:** o PTS de captura é rebaseado para zero no início da gravação. Não usar `do-timestamp` no appsrc.
 - **Parada correta:** `appsrc.end_of_stream()`, depois **esperar `EOS` no bus** (timeout de 5 s), e só então ir para `Null`. ⚠️ Sem isso o MP4 fica sem o átomo `moov` e **não abre**.
 - Fechar o app durante uma gravação executa a mesma sequência antes de sair.
@@ -292,12 +301,23 @@ A interpretação "clique curto/longo" fica no app, não na fonte:
 
 **Caminho de longo prazo (backlog):** enviar um patch ao `linux-media` adicionando um quirk para `05e3:f12a` no `uvcvideo`. Se for aceito, o `EvdevSource` assume e o helper se torna desnecessário.
 
-### 6.11 Ajustes de imagem (controles V4L2)
+### 6.11 Ajustes de imagem (por software)
 
-- Controles enumerados **dinamicamente** (`VIDIOC_QUERYCTRL`) via crate `v4l`, num fd separado do usado pelo GStreamer (o V4L2 permite isso).
-- A UI gera sliders e switches a partir do que o aparelho anuncia (brilho, contraste, saturação, nitidez, gama, balanço de branco etc.). Botão "Restaurar padrões".
-- Valores salvos por dispositivo (VID:PID) e reaplicados ao conectar.
-- ⚠️ **Pendente:** rodar `v4l2-ctl -d /dev/video2 --list-ctrls` para saber quais controles este aparelho realmente tem.
+O microscópio **não expõe nenhum controle V4L2** (§2). Os ajustes são feitos **no pipeline de captura**, antes do `videoflip`, e por isso aparecem na tela, na foto e no vídeo.
+
+| Ajuste | Elemento | Faixa na UI |
+|---|---|---|
+| Brilho | `videobalance.brightness` | −1,0 … +1,0 (padrão 0) |
+| Contraste | `videobalance.contrast` | 0 … 2,0 (padrão 1) |
+| Saturação | `videobalance.saturation` | 0 … 2,0 (padrão 1) |
+| Gama | `gamma.gamma` | 0,3 … 3,0 (padrão 1) |
+| Nitidez | `gaussianblur` com `sigma` **negativo** (gst-plugins-bad, `gaudieffects`; exige `videoconvert` para AYUV ao redor) | 0 … 100% (padrão 0, mapeado para sigma 0 … −2,0) |
+
+- As propriedades são alteradas **ao vivo**, sem reiniciar o pipeline.
+- Com todos os valores no padrão, o ramo de nitidez fica fora do pipeline (ou em passthrough), para não gastar CPU.
+- Se `gaussianblur` não estiver disponível no sistema, o controle de nitidez fica oculto (verificar com `ElementFactory::find`).
+- Valores salvos por dispositivo (chave = VID:PID) e reaplicados ao conectar. Botão "Restaurar padrões".
+- Futuro: se um aparelho expuser controles V4L2 reais (ou o quirk do `uvcvideo` for aceito), eles podem ser adicionados ao lado. Isso fica fora do escopo da v1.
 
 ### 6.12 Configuração e persistência
 
@@ -397,7 +417,7 @@ O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar n
 ## 12. Questões em aberto
 
 1. ~~Versões de GTK, libadwaita e GStreamer na máquina do Henrique~~: resolvido (§4).
-2. Saída de `v4l2-ctl -d /dev/video2 --list-ctrls`.
-3. Os LEDs são controláveis por software? (Depende do item 2.)
+2. ~~Controles V4L2~~: resolvido. **Nenhum** (§2, §6.11).
+3. ~~LEDs controláveis?~~: resolvido. **Não**, só pela roda do cabo.
 4. ~~Licença~~: resolvido (2026-11-10). **GPL-3.0-or-later**, copyright MundoTela Tecnologia (`LICENSE` na raiz com o texto oficial da GPLv3, `license = "GPL-3.0-or-later"` no workspace, `publish = false` em todos os crates).
 5. ~~Repositório~~: resolvido. `github.com/mundotela/HiViewLinuxMicroscopio` (privado). O push é feito pela engenharia.

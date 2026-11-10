@@ -183,7 +183,9 @@ Você pode mudar o tempo do clique longo em Preferências → Botão físico. L�
 
 ### 11.2 Ajustes de imagem
 
-Brilho, contraste, nitidez e outros controles que o microscópio oferecer. **Restaurar padrões** desfaz tudo. Os ajustes ficam salvos para a próxima vez.
+Brilho, contraste, saturação, gama e nitidez. Eles são aplicados pelo HiView na imagem, então aparecem também nas fotos e nos vídeos. **Restaurar padrões** desfaz tudo. Os ajustes ficam salvos para a próxima vez.
+
+> O brilho dos **LEDs** do microscópio só muda pela roda do cabo. O ajuste de brilho do app clareia ou escurece a imagem, mas não muda a luz. Para objetos que refletem muito, baixe primeiro os LEDs.
 
 ### 11.3 Medição
 

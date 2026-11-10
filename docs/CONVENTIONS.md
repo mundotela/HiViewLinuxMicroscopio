@@ -45,7 +45,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 |---|---|
 | UI | `gtk4` (feature `v4_14`), `libadwaita` (feature `v1_5`), `relm4` |
 | Vídeo | `gstreamer`, `gstreamer-app`, `gstreamer-video`, `gstreamer-pbutils` (discoverer) |
-| Hardware | `udev`, `v4l`, `evdev`, `nix` ou `libc` (só no buttond) |
+| Hardware | `udev`, `evdev`, `nix` ou `libc` (só no buttond) |
 | Imagem | `image` (png, jpeg), `cairo-rs` (via gtk4) |
 | Config | `serde`, `toml` |
 | Erros | `thiserror` (bibliotecas), `anyhow` (binários) |
@@ -54,7 +54,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 | Tempo | `chrono` |
 | Testes | `tempfile`, `approx` |
 
-**Não use:** `tokio` (o loop do glib/Relm4 basta), `opencv`, `nokhwa`, `egui`, `lazy_static` (use `std::sync::LazyLock`).
+**Não use:** `tokio` (o loop do glib/Relm4 basta), `v4l` (exige libclang; enumeração e formatos vêm de udev + `gst::DeviceMonitor`), `opencv`, `nokhwa`, `egui`, `lazy_static` (use `std::sync::LazyLock`).
 
 ---
 
