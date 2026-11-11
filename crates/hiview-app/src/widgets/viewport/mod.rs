@@ -50,11 +50,12 @@ impl Viewport {
         );
         let new_size = Size::new(f64::from(frame.width), f64::from(frame.height));
         if new_size != imp.frame_size.get() {
-            let prev = imp.frame_size.replace(new_size);
-            if prev.width > 0.0 {
-                imp.transform
-                    .borrow_mut()
-                    .on_frame_resize(new_size, imp.widget_size());
+            imp.frame_size.replace(new_size);
+            let widget = imp.widget_size();
+            // Defer the refit while the widget still has no real
+            // allocation; Fit mode recomputes on size_allocate.
+            if widget.width > 0.0 {
+                imp.transform.borrow_mut().on_resize(new_size, widget);
             }
         }
         imp.frame.replace(Some(frame));
@@ -107,10 +108,15 @@ impl Viewport {
         self.queue_draw();
     }
 
-    /// Resets to fit mode and unfreezes (e.g. when a stream starts).
+    /// Resets to fit mode, unfreezes and drops the stale frame (e.g.
+    /// when a stream restarts). Clearing the frame size forces a refit
+    /// on the next frame even when it matches the old size.
     pub fn reset(&self) {
         let imp = self.imp();
         imp.frozen.set(false);
+        imp.texture.replace(None);
+        imp.frame.replace(None);
+        imp.frame_size.set(Size::default());
         imp.transform.replace(ViewTransform::default());
         self.queue_draw();
     }

@@ -161,10 +161,13 @@ impl ViewTransform {
         }
     }
 
-    /// Recomputes the transform after the frame size changed (e.g. a 90°
-    /// rotation swaps 640×480 to 480×640): refit in `Fit`, keep the scale
-    /// and re-clamp in `Fixed`.
-    pub fn on_frame_resize(&mut self, frame: Size, widget: Size) {
+    /// Recomputes the transform after the frame or the widget changed
+    /// size (e.g. a 90° rotation swaps 640×480 to 480×640, or a window
+    /// resize): refit in `Fit`, keep the scale and re-clamp in `Fixed`.
+    /// Safe to call with a zero-sized widget — the transform stays in
+    /// `Fit` mode and produces the correct layout when a real size
+    /// arrives.
+    pub fn on_resize(&mut self, frame: Size, widget: Size) {
         if self.mode == ViewMode::Fit {
             *self = Self::fit(frame, widget);
         } else {
@@ -299,7 +302,7 @@ mod tests {
     fn frame_resize_after_rotation_refits() {
         let rotated: Size = Size::new(480.0, 640.0); // 90° swapped 640x480
         let mut t = ViewTransform::fit(FRAME_640X480, WIDGET);
-        t.on_frame_resize(rotated, WIDGET);
+        t.on_resize(rotated, WIDGET);
         assert_eq!(t.mode, ViewMode::Fit);
         // min(800/480, 600/640) = 600/640 = 0.9375
         assert_eq!(t.scale, 0.9375);
@@ -311,11 +314,43 @@ mod tests {
     fn frame_resize_keeps_fixed_scale() {
         let rotated: Size = Size::new(480.0, 640.0);
         let mut t = ViewTransform::zoom_100(FRAME_640X480, WIDGET);
-        t.on_frame_resize(rotated, WIDGET);
+        t.on_resize(rotated, WIDGET);
         assert_eq!(t.mode, ViewMode::Fixed);
         assert_eq!(t.scale, 1.0);
         // Width re-centers (480 < 800); height clamps to the widget edge
         // (640 > 600, so the top-left sits at y = 0).
         assert_eq!(t.offset, Point::new(160.0, 0.0));
+    }
+
+    #[test]
+    fn fit_requested_before_size_known_becomes_correct_on_resize() {
+        // Fit evaluated against a zero allocation stays in Fit mode; once
+        // the real size arrives, a resize produces the correct fit.
+        let mut t = ViewTransform::fit(FRAME_640X480, Size::default());
+        t.on_resize(FRAME_640X480, WIDGET);
+        assert_eq!(t, ViewTransform::fit(FRAME_640X480, WIDGET));
+    }
+
+    #[test]
+    fn widget_resize_in_fit_mode_keeps_image_centered() {
+        let mut t = ViewTransform::fit(FRAME_640X480, WIDGET);
+        let wider = Size::new(1300.0, 900.0);
+        t.on_resize(FRAME_640X480, wider);
+        assert_eq!(t, ViewTransform::fit(FRAME_640X480, wider));
+        // Height limits (1.875); the extra 100 px is split evenly.
+        assert_eq!(t.offset.x, 50.0);
+        assert_eq!(t.offset.y, 0.0);
+    }
+
+    #[test]
+    fn widget_shrink_in_fixed_mode_clamps_to_edges() {
+        let mut t = ViewTransform::fit(FRAME_640X480, WIDGET);
+        t.zoom_at_center(4.0, FRAME_640X480, WIDGET);
+        let small = Size::new(200.0, 150.0);
+        t.on_resize(FRAME_640X480, small);
+        // The scaled image (2560x1920) still covers the widget: offset is
+        // inside [widget - scaled, 0], never pushed to a stray corner.
+        assert!(t.offset.x >= small.width - 640.0 * t.scale && t.offset.x <= 0.0);
+        assert!(t.offset.y >= small.height - 480.0 * t.scale && t.offset.y <= 0.0);
     }
 }
