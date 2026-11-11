@@ -531,6 +531,7 @@ impl AppModel {
         }
         let label = format!("{} fps", self.frame_times.len());
         if label != self.fps_label {
+            tracing::debug!("rendered: {label}");
             self.fps_label = label;
         }
     }
