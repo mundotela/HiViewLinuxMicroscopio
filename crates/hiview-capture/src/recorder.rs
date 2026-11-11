@@ -369,8 +369,11 @@ fn build_record_pipeline(
     match encoder {
         VideoEncoder::X264 => {
             enc.set_property_from_str("tune", "zerolatency");
-            enc.set_property_from_str("speed-preset", "veryfast");
+            enc.set_property_from_str("speed-preset", "superfast");
             enc.set_property("bitrate", BITRATE_KBPS);
+            // One encoder thread: at 640×480 the default pool costs more
+            // in synchronization than it saves in encode time (§7 budget).
+            enc.set_property("threads", 1_u32);
         }
         VideoEncoder::OpenH264 => {
             enc.set_property("bitrate", BITRATE_KBPS * 1000);
