@@ -143,6 +143,32 @@ fn records_three_seconds_of_videotestsrc() {
     );
 }
 
+/// Publishes `count` RGBA frames of random noise at ~30 fps. Noise is
+/// worst-case content: a compressible pattern lets the encoder
+/// undershoot the target bitrate.
+fn publish_noise_frames(bus: &FrameBus, count: u64) {
+    let mut seed = 0x1234_5678_9abc_def0_u64;
+    for n in 0..count {
+        let data: Vec<u8> = (0..640 * 480 * 4)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed as u8
+            })
+            .collect();
+        bus.publish(Frame {
+            width: 640,
+            height: 480,
+            stride: 640 * 4,
+            format: PixelFormat::Rgba,
+            data: gst::glib::Bytes::from_owned(data),
+            pts: Some(gst::ClockTime::from_mseconds(n * 33)),
+        });
+        std::thread::sleep(Duration::from_millis(33));
+    }
+}
+
 /// Bitrate guard (M4 review): a 10 s recording must stay within
 /// 2.0-3.0 Mbit/s — the `reserved-moov` header is a fixed-size block
 /// that must not dominate the file. High-entropy frames are required:
@@ -157,30 +183,7 @@ fn recording_stays_near_target_bitrate() {
     })
     .unwrap_or_else(|e| panic!("recorder failed to start: {e}"));
 
-    // Worst-case content: per-frame random noise forces the encoder to
-    // spend real bitrate (a 640x480 YUYV frame needs ~600 kB/frame).
-    let noise = |seed: &mut u64, n: usize| -> Vec<u8> {
-        (0..n)
-            .map(|_| {
-                *seed ^= *seed << 13;
-                *seed ^= *seed >> 7;
-                *seed ^= *seed << 17;
-                *seed as u8
-            })
-            .collect()
-    };
-    let mut seed = 0x1234_5678_9abc_def0_u64;
-    for n in 0..300u64 {
-        bus.publish(Frame {
-            width: 640,
-            height: 480,
-            stride: 640 * 4,
-            format: PixelFormat::Rgba,
-            data: gst::glib::Bytes::from_owned(noise(&mut seed, 640 * 480 * 4)),
-            pts: Some(gst::ClockTime::from_mseconds(n * 33)),
-        });
-        std::thread::sleep(Duration::from_millis(33));
-    }
+    publish_noise_frames(&bus, 300);
     let stop = recorder.stop();
     assert!(stop.error.is_none(), "unclean stop: {:?}", stop.error);
 
@@ -192,6 +195,95 @@ fn recording_stays_near_target_bitrate() {
     assert!(
         (2.0..=3.0).contains(&mbit_s),
         "bitrate {mbit_s:.2} Mbit/s outside 2.0-3.0 ({bytes} B / {duration:.2} s)"
+    );
+}
+
+/// Revisão 4 (a): the reserved-moov index is NOT a recording-length
+/// limit. With a test-only 10 s reserve, a ~20 s recording stopped
+/// normally must still produce a complete, fully decodable file.
+#[test]
+fn recording_beyond_reserved_duration_finalizes_fully() {
+    LazyLock::force(&GST_INIT);
+    let dir = temp_dir();
+    let bus = FrameBus::default();
+    let recorder = Recorder::start_with_reserve(
+        bus.subscribe(),
+        640,
+        480,
+        30,
+        1,
+        &dir,
+        |err| panic!("record pipeline error: {err}"),
+        gst::ClockTime::from_seconds(10),
+    )
+    .unwrap_or_else(|e| panic!("recorder failed to start: {e}"));
+
+    publish_noise_frames(&bus, 600); // ~20 s, twice the reserve
+    let stop = recorder.stop();
+    assert!(stop.error.is_none(), "unclean stop: {:?}", stop.error);
+
+    let (duration, profile, width, height) = probe_video(&stop.path);
+    assert!(
+        (19.0..=20.5).contains(&duration),
+        "duration {duration:.2}s of ~20 s feed unreasonable"
+    );
+    assert_eq!(profile, "constrained-baseline");
+    assert_eq!((width, height), (640, 480));
+    let decoded = decode_frame_count(&stop.path);
+    assert!(
+        decoded >= 300,
+        "only {decoded} frames decoded from a ~20 s recording"
+    );
+}
+
+/// Revisão 4 (b): same setup, but the recorder is dropped without EOS
+/// past the reserve — the kill/crash case. The periodic `moov` rewrite
+/// keeps tracking the samples, so the file must still report close to
+/// the real duration (measured: ~1 s of index lag), not just the
+/// reserved range.
+#[test]
+fn abrupt_teardown_beyond_reserve_keeps_real_duration() {
+    LazyLock::force(&GST_INIT);
+    let dir = temp_dir();
+    let bus = FrameBus::default();
+    let recorder = Recorder::start_with_reserve(
+        bus.subscribe(),
+        640,
+        480,
+        30,
+        1,
+        &dir,
+        |err| panic!("record pipeline error: {err}"),
+        gst::ClockTime::from_seconds(10),
+    )
+    .unwrap_or_else(|e| panic!("recorder failed to start: {e}"));
+
+    publish_noise_frames(&bus, 600); // ~20 s, twice the reserve
+    let path = recorder.path().to_path_buf();
+    drop(recorder); // no EOS: same on-disk state as a killed process
+
+    // The tail `moov` lands when the muxer shuts down; poll briefly
+    // instead of racing it.
+    let mut probe = None;
+    for _ in 0..40 {
+        match std::panic::catch_unwind(|| probe_video(&path)) {
+            Ok(p) => {
+                probe = Some(p);
+                break;
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let (duration, profile, _, _) =
+        probe.unwrap_or_else(|| panic!("file never became discoverable"));
+    assert_eq!(profile, "constrained-baseline");
+    assert!(
+        duration >= 17.0,
+        "killed file reports only {duration:.2}s of a ~20 s feed past the reserve"
+    );
+    assert!(
+        decode_frame_count(&path) >= 200,
+        "killed file does not decode past the reserve"
     );
 }
 

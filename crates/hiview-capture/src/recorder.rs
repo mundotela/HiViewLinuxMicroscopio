@@ -43,6 +43,13 @@ const FEED_IDLE: Duration = Duration::from_millis(200);
 /// 19 MB per recorded minute at 640×480.
 const BITRATE_KBPS: u32 = 2500;
 
+/// Reserved `moov`-index duration: 5 min of samples ≈ 0.4 MB of fixed
+/// header per file. Proven NOT to be a recording-length limit (report
+/// Revisão 4): past the reserve the muxer keeps the periodic `moov`
+/// rewrite working and EOS always writes a complete index — the value
+/// only bounds the upfront allocation.
+const RESERVED_MAX_DURATION: gst::ClockTime = gst::ClockTime::from_seconds(300);
+
 /// H.264 encoder usable on this system (§6.7: x264enc preferred,
 /// openh264enc as runtime fallback).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,6 +178,34 @@ impl Recorder {
         dir: &Path,
         on_error: impl Fn(String) + Send + 'static,
     ) -> Result<Self, Error> {
+        Self::start_with_reserve(
+            subscription,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            dir,
+            on_error,
+            RESERVED_MAX_DURATION,
+        )
+    }
+
+    /// Like [`Recorder::start`] with an explicit reserved-moov index
+    /// duration. Production always uses [`RESERVED_MAX_DURATION`]; the
+    /// parameter exists so tests can exercise recordings that outgrow
+    /// the reserve without waiting minutes.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_reserve(
+        subscription: FrameSubscription,
+        width: u32,
+        height: u32,
+        fps_num: i32,
+        fps_den: i32,
+        dir: &Path,
+        on_error: impl Fn(String) + Send + 'static,
+        reserved_max_duration: gst::ClockTime,
+    ) -> Result<Self, Error> {
         crate::init()?;
         let encoder = available_encoder()
             .ok_or_else(|| Error::VideoDevice("no H.264 encoder available".into()))?;
@@ -178,8 +213,15 @@ impl Recorder {
             .map_err(|e| Error::VideoDevice(format!("cannot create {}: {e}", dir.display())))?;
         let path = unique_photo_path(dir, &video_filename(Local::now()));
 
-        let (pipeline, appsrc) =
-            build_record_pipeline(encoder, width, height, fps_num, fps_den, &path)?;
+        let (pipeline, appsrc) = build_record_pipeline(
+            encoder,
+            width,
+            height,
+            fps_num,
+            fps_den,
+            &path,
+            reserved_max_duration,
+        )?;
 
         let feeding = Arc::new(AtomicBool::new(true));
         let dropped = subscription.dropped_counter();
@@ -344,6 +386,7 @@ fn build_record_pipeline(
     fps_num: i32,
     fps_den: i32,
     path: &Path,
+    reserved_max_duration: gst::ClockTime,
 ) -> Result<(gst::Pipeline, gst_app::AppSrc), Error> {
     let pipeline = gst::Pipeline::builder().name("hiview-record").build();
     let src = gst_app::AppSrc::builder()
@@ -389,14 +432,13 @@ fn build_record_pipeline(
     )?;
     let parse = make("h264parse")?;
     let mux = make("mp4mux")?;
-    // Crash resilience (engineering decision, §6.7): reserve index space
-    // for 5 min of samples and rewrite the on-disk `moov` every second.
-    // A crash, SIGKILL or power loss leaves a seekable file whose header
-    // already covers (nearly) everything written — the fragmented-MP4
-    // modes were measured to report only the first fragment's duration.
-    // 5 min keeps the fixed header overhead at ~0.4 MB (§7 bitrate);
-    // recordings past the reserve fall back to a normal moov-at-EOS.
-    mux.set_property("reserved-max-duration", 300_000_000_000_u64);
+    // Crash resilience (engineering decision, §6.7): reserve index
+    // space and rewrite the on-disk `moov` every second. A crash,
+    // SIGKILL or power loss leaves a seekable file whose header already
+    // covers (nearly) everything written — the fragmented-MP4 modes
+    // were measured to report only the first fragment's duration.
+    // EOS past the reserve still writes a complete index (Revisão 4).
+    mux.set_property("reserved-max-duration", reserved_max_duration);
     mux.set_property("reserved-moov-update-period", 1_000_000_000_u64);
     let sink = make("filesink")?;
     sink.set_property("location", path.to_string_lossy().as_ref());
