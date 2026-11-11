@@ -393,7 +393,7 @@ impl SimpleComponent for GalleryModel {
             } => {
                 self.photo_dir = photo_dir.clone();
                 self.video_dir = video_dir.clone();
-                tracing::info!(
+                tracing::debug!(
                     "gallery: opened (live pages: {})",
                     GALLERY_INSTANCES.load(Ordering::SeqCst)
                 );

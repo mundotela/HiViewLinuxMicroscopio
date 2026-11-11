@@ -618,12 +618,6 @@ impl SimpleComponent for AppModel {
                 }
             }
         });
-        // Benchmark aid for the M5 report (§11.0): opens the gallery as
-        // soon as the window is up so timings can be sampled from logs.
-        if std::env::var_os("HIVIEW_OPEN_GALLERY").is_some() {
-            let sender = sender.clone();
-            glib::idle_add_local_once(move || sender.input(Input::ToggleGallery));
-        }
         // Debug aid (M4 orphan-overlay bug): log the actual widget tree
         // so a toast targeting an off-screen overlay is visible in logs.
         dump_widget_tree(&root, 0);
