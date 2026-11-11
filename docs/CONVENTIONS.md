@@ -156,6 +156,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - Commits no formato **Conventional Commits**: `feat(capture): add udev hotplug watcher`, `fix(app): ...`, `test(core): ...`, `docs: ...`, `chore: ...`.
   - Escopos: `core`, `capture`, `button`, `buttond`, `app`, `ci`, `docs`.
 - Commits pequenos e coerentes. Não junte refatoração com feature no mesmo commit.
+- **Verificação final sobre o que está commitado:** antes de escrever o relatório, a árvore de trabalho precisa estar limpa (`git status --short` vazio, exceto arquivos que a engenharia deixou pendentes de propósito). Só então rode fmt, clippy e testes. Cole a saída de `git status --short` e `git log --oneline main..HEAD` no relatório. Motivo: no M1, um commit foi gravado com conteúdo intermediário do editor e entrou em `main` quebrado, sem a CI detectar.
 - Ao concluir: relatório em `docs/reports/M<N>.md` (seguindo `DEVIN_REPORT_TEMPLATE.md`), commitado no branch e também colado no chat.
 - **Proibido:** `git push`, abrir PR, fazer merge em `main`, reescrever histórico (`rebase`/`reset --hard`/`push --force`) de `main`. Tudo isso é papel da engenharia.
 

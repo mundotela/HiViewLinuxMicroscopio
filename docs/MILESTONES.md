@@ -194,7 +194,7 @@ O microscópio não tem controles V4L2. Os ajustes são feitos no pipeline (`ARC
 
 1. Cada ajuste altera a imagem ao vivo, sem travar e sem cair abaixo de 29 fps.
 2. Foto (M3) e vídeo (M4) saem com os ajustes aplicados, iguais à tela.
-3. Com tudo no padrão, o uso de CPU fica igual ao do M1 (±2 pontos percentuais).
+3. Com tudo no padrão, o uso de CPU fica igual ao do M2 (~14% de um núcleo, ±2 pontos percentuais). Com todos os ajustes ativos, o app inteiro fica abaixo do **teto de 25% de um núcleo** (`ARCHITECTURE.md §7`).
 4. Os valores são reaplicados ao reconectar e ao reabrir o app.
 
 ---

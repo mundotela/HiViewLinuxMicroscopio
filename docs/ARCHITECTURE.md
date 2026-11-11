@@ -343,6 +343,8 @@ Um arquivo de configuração inválido não pode derrubar o app: ele é renomead
 | Trabalho | comandos assíncronos do Relm4 / `gio::spawn_blocking` | Encode de foto, miniaturas, empilhamento |
 | Botão | thread da fonte | Envia `ButtonEvent` para a UI pelo sender do Relm4 |
 
+**Orçamento de CPU:** com vídeo ao vivo a 30 fps, o app inteiro deve ficar **abaixo de 25% de um núcleo** na máquina alvo, em qualquer nível de zoom e com qualquer combinação de ajustes. Linha de base medida no M2: ~14% (o `videoflip` sozinho custa ~4–5 pontos percentuais; isso foi aceito para não remontar o pipeline a cada rotação). Todo milestone que mexe no pipeline mede e reporta a CPU.
+
 ---
 
 ## 8. Testabilidade sem hardware
