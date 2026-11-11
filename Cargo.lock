@@ -904,6 +904,7 @@ dependencies = [
  "gstreamer-pbutils",
  "gstreamer-video",
  "hiview-core",
+ "image",
  "tempfile",
  "thiserror",
  "tracing",
