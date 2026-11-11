@@ -390,12 +390,13 @@ fn build_record_pipeline(
     let parse = make("h264parse")?;
     let mux = make("mp4mux")?;
     // Crash resilience (engineering decision, §6.7): reserve index space
-    // for up to 2 h and rewrite the on-disk `moov` every second. A crash,
-    // SIGKILL or power loss leaves a seekable file whose header already
-    // covers (nearly) everything written — the fragmented-MP4 modes were
-    // measured to report only the first fragment's duration on a kill.
-    // The EOS finalize remains mandatory for a complete `moov`.
-    mux.set_property("reserved-max-duration", 7_200_000_000_000_u64);
+    // for 5 min of samples and rewrite the on-disk `moov` every second.
+    // A crash, SIGKILL or power loss leaves a seekable file whose header
+    // already covers (nearly) everything written — the fragmented-MP4
+    // modes were measured to report only the first fragment's duration.
+    // 5 min keeps the fixed header overhead at ~0.4 MB (§7 bitrate);
+    // recordings past the reserve fall back to a normal moov-at-EOS.
+    mux.set_property("reserved-max-duration", 300_000_000_000_u64);
     mux.set_property("reserved-moov-update-period", 1_000_000_000_u64);
     let sink = make("filesink")?;
     sink.set_property("location", path.to_string_lossy().as_ref());

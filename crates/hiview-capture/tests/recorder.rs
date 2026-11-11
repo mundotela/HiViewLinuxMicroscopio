@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use gst::prelude::*;
 use gst_pbutils::prelude::DiscovererStreamInfoExt;
-use hiview_capture::{CapturePipeline, CaptureSource, FrameBus, Recorder};
+use hiview_capture::{CapturePipeline, CaptureSource, Frame, FrameBus, PixelFormat, Recorder};
 
 const TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -140,6 +140,58 @@ fn records_three_seconds_of_videotestsrc() {
     assert!(
         decoded >= 60,
         "only {decoded} frames decoded from a 3 s recording"
+    );
+}
+
+/// Bitrate guard (M4 review): a 10 s recording must stay within
+/// 2.0-3.0 Mbit/s — the `reserved-moov` header is a fixed-size block
+/// that must not dominate the file. High-entropy frames are required:
+/// a compressible test pattern lets the encoder undershoot the target.
+#[test]
+fn recording_stays_near_target_bitrate() {
+    LazyLock::force(&GST_INIT);
+    let dir = temp_dir();
+    let bus = FrameBus::default();
+    let recorder = Recorder::start(bus.subscribe(), 640, 480, 30, 1, &dir, |err| {
+        panic!("record pipeline error: {err}")
+    })
+    .unwrap_or_else(|e| panic!("recorder failed to start: {e}"));
+
+    // Worst-case content: per-frame random noise forces the encoder to
+    // spend real bitrate (a 640x480 YUYV frame needs ~600 kB/frame).
+    let noise = |seed: &mut u64, n: usize| -> Vec<u8> {
+        (0..n)
+            .map(|_| {
+                *seed ^= *seed << 13;
+                *seed ^= *seed >> 7;
+                *seed ^= *seed << 17;
+                *seed as u8
+            })
+            .collect()
+    };
+    let mut seed = 0x1234_5678_9abc_def0_u64;
+    for n in 0..300u64 {
+        bus.publish(Frame {
+            width: 640,
+            height: 480,
+            stride: 640 * 4,
+            format: PixelFormat::Rgba,
+            data: gst::glib::Bytes::from_owned(noise(&mut seed, 640 * 480 * 4)),
+            pts: Some(gst::ClockTime::from_mseconds(n * 33)),
+        });
+        std::thread::sleep(Duration::from_millis(33));
+    }
+    let stop = recorder.stop();
+    assert!(stop.error.is_none(), "unclean stop: {:?}", stop.error);
+
+    let bytes = std::fs::metadata(&stop.path)
+        .unwrap_or_else(|e| panic!("stat {}: {e}", stop.path.display()))
+        .len();
+    let (duration, _, _, _) = probe_video(&stop.path);
+    let mbit_s = (bytes as f64 * 8.0) / duration / 1e6;
+    assert!(
+        (2.0..=3.0).contains(&mbit_s),
+        "bitrate {mbit_s:.2} Mbit/s outside 2.0-3.0 ({bytes} B / {duration:.2} s)"
     );
 }
 
