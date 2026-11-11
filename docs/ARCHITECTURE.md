@@ -246,6 +246,8 @@ appsrc name=src is-live=true format=time caps=video/x-raw,format=RGBA,width=W,he
 
 ### 6.8 Galeria
 
+> **Implementado no M5.** Pontos de projeto que se mostraram essenciais: **um único** componente de galeria durante toda a vida do app (página empurrada e retirada do `adw::NavigationView`); quadradinhos com **moldura fixa 4:3** e a miniatura contida nela; **clique simples abre**, Enter abre, e botão direito abre um **popover único** pendurado na grade; quadradinhos **não recebem o ponteiro** (`can_target=false`), por causa de um bug do GTK 4.14 com widgets reciclados; o mapeamento clique → item é feito pela grade. A gravação em andamento aparece como um quadradinho "Gravando…" identificado pelo caminho do arquivo (no máximo um por gravação).
+
 - Lê as duas pastas do HiView e mostra uma grade de miniaturas (`gtk::GridView`), ordenada da mais recente para a mais antiga.
 - Miniaturas geradas em thread de trabalho e guardadas em cache em `$XDG_CACHE_HOME/hiview/thumbs/`. Para vídeos, a miniatura sai do primeiro quadro via GStreamer.
 - Ações: abrir no visualizador do sistema (`gtk::FileLauncher`), mostrar na pasta, excluir (com confirmação, movendo para a lixeira via `gio::File::trash`).

@@ -104,6 +104,8 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
   - `debug`: detalhes;
   - `trace`: por frame.
 - **Nunca** logar nada por frame em `info` ou acima.
+- Contadores e métricas de diagnóstico (ex.: instâncias vivas, tempos de miniatura) ficam em `debug`.
+- **Ganchos por variável de ambiente para testes ou benchmarks não ficam no código de produção.** Antes do relatório, rode `git grep -n "env::var" -- crates/`: toda ocorrência precisa ser legítima (ex.: `XDG_CONFIG_HOME`) e estar justificada no relatório.
 
 ---
 
@@ -117,6 +119,9 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
   - chamadas síncronas ao GStreamer que aguardam mudança de estado.
 - Trabalho pesado vai para comandos assíncronos do Relm4 (`sender.oneshot_command` / `spawn_command`) ou para `gio::spawn_blocking`.
 - Callbacks do GStreamer (`appsink`, bus em thread) **não tocam em widgets**. Eles enviam mensagens pelo `ComponentSender`/`Sender`.
+- **Nunca segure um `borrow` de `RefCell`/`Mutex` durante uma chamada ao GTK ou ao GStreamer.** Copie o que precisa, solte o borrow e só então chame. O GTK pode reentrar no nosso código pela mesma pilha, e um pânico dentro de um callback do GTK não se recupera: o app **aborta** (crash do M5). Em callbacks de factory (`setup`/`bind`/`unbind`/`teardown`), use `try_borrow` e adie com `glib::idle_add_local_once` em vez de entrar em pânico.
+- **Widgets reciclados (`GridView`/`ListView`):** nunca guarde referência a um widget de item, nem pendure popover ou diálogo nele. Resolva o item pelo **dado do modelo** (ex.: o caminho do arquivo) no momento da ação, e apresente diálogos na janela. Widgets de item não devem ser alvo do ponteiro (`can_target=false`): o GTK 4.14 tem um bug com widgets desparentados sob o cursor (`Gtk-CRITICAL gtk_widget_compute_point`). Gestos e menus ficam na grade, que é permanente.
+- **Critério de aceite de UI:** zero linhas `Gtk-CRITICAL`, `Gdk-CRITICAL` ou `panicked` no log de uma sessão completa de uso.
 
 ---
 

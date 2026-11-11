@@ -274,3 +274,6 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 - Gravação com sobreposições.
 - Internacionalização (gettext) e inglês.
 - Suporte a outros microscópios (`KNOWN_MICROSCOPES`).
+- Reportar ao GTK o bug de `translate_coordinates` sem checagem de `native == NULL` (crossing events sobre widgets desparentados; presente no 4.14.5 e no 4.18.6). Evidência em `docs/reports/M5.md`.
+- Galeria: `gio::FileMonitor` para refletir alterações externas nas pastas em tempo real (hoje, a lista é atualizada ao abrir).
+- Galeria: seleção múltipla e arrastar-e-soltar.
