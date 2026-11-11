@@ -80,6 +80,14 @@ impl Viewport {
         }
     }
 
+    /// The frame a photo should capture (§6.6): the frozen frame while
+    /// frozen, otherwise the latest displayed frame.
+    #[must_use]
+    pub fn photo_frame(&self) -> Option<Frame> {
+        self.frozen_frame()
+            .or_else(|| self.imp().frame.borrow().clone())
+    }
+
     /// Zooms in around the widget center (`+` key/button).
     pub fn zoom_in(&self) {
         self.imp().zoom_at_center(imp::ZOOM_STEP);

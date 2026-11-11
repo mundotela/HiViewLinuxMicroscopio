@@ -8,16 +8,20 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hiview_capture::{CameraDescriptor, CameraEvent, CameraState};
-use hiview_core::ViewOrientation;
+use hiview_core::{
+    AppConfig, PhotoFormat, PhotoResolution, ViewOrientation, config_path, load_config, save_config,
+};
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
-use relm4::gtk::{self, gio};
+use relm4::gtk::{self, gio, glib};
 use relm4::{ComponentParts, ComponentSender, SimpleComponent, adw};
 
 use crate::cli::Args;
 use crate::services::camera::CameraService;
+use crate::services::photo::{PhotoOutcome, PhotoService};
 use crate::strings;
 use crate::widgets::viewport::Viewport;
+use std::path::PathBuf;
 
 /// Stylesheet for the FPS badge, freeze indicator and floating toolbar,
 /// installed once at startup.
@@ -45,6 +49,19 @@ pub const GLOBAL_CSS: &str = ".fps-indicator {
     border-radius: 24px;
     padding: 4px;
     margin-bottom: 16px;
+}
+.shutter-flash {
+    background-color: #ffffff;
+    opacity: 0;
+    transition: opacity 350ms ease-out;
+}
+.shutter-flash.on {
+    opacity: 0.55;
+    transition: none;
+}
+.shutter-button {
+    padding: 12px;
+    margin: 0 8px;
 }";
 
 /// Menu target value meaning "pick automatically".
@@ -69,6 +86,8 @@ relm4::new_stateless_action!(RotateCwAction, WindowActionGroup, "rotate-cw");
 relm4::new_stateless_action!(FreezeAction, WindowActionGroup, "freeze");
 relm4::new_stateless_action!(FullscreenAction, WindowActionGroup, "fullscreen");
 relm4::new_stateless_action!(EscapeAction, WindowActionGroup, "escape");
+relm4::new_stateless_action!(TakePhotoAction, WindowActionGroup, "take-photo");
+relm4::new_stateless_action!(PreferencesAction, WindowActionGroup, "preferences");
 
 /// Inputs handled by the root component.
 #[derive(Debug)]
@@ -101,6 +120,18 @@ pub enum Input {
     ToggleFullscreen,
     /// Leave fullscreen (`Esc`).
     Escape,
+    /// Take a photo (`Espaço` or the shutter button).
+    TakePhoto,
+    /// A photo save job finished on the worker thread.
+    PhotoDone(PhotoOutcome),
+    /// Open the preferences dialog (`Ctrl+,`).
+    OpenPreferences,
+    /// Photo format combo changed (0 = PNG, 1 = JPEG).
+    SetPhotoFormat(u32),
+    /// Resolution combo changed (0 = native, 1 = 1280x960, 2 = 1600x1200).
+    SetPhotoResolution(u32),
+    /// A new photo folder was picked in the preferences dialog.
+    SetPhotoFolder(PathBuf),
 }
 
 /// Root component of the application.
@@ -130,6 +161,17 @@ pub struct AppModel {
     show_fps: bool,
     fps_label: String,
     frame_times: VecDeque<Instant>,
+    /// Persistent preferences (docs/ARCHITECTURE.md section 6.12).
+    config: AppConfig,
+    config_path: PathBuf,
+    /// True when the config file was invalid and reset; a toast warns once.
+    config_recovered: bool,
+    /// Background photo encode/write worker (section 7).
+    photos: PhotoService,
+    toast_overlay: adw::ToastOverlay,
+    shutter_flash: gtk::Box,
+    /// Folder row of the open preferences dialog, to refresh its subtitle.
+    pref_folder_row: Option<adw::ActionRow>,
 }
 
 #[relm4::component(pub)]
@@ -156,9 +198,12 @@ impl SimpleComponent for AppModel {
                     },
                 },
 
-                #[name = "content_stack"]
+                #[name = "toast_overlay"]
                 #[wrap(Some)]
-                set_content = &gtk::Stack {
+                set_content = &adw::ToastOverlay {
+                    #[name = "content_stack"]
+                    #[wrap(Some)]
+                    set_child = &gtk::Stack {
 
                     #[name = "searching_page"]
                     add_child = &adw::StatusPage {
@@ -187,6 +232,12 @@ impl SimpleComponent for AppModel {
                         #[name = "viewport"]
                         #[wrap(Some)]
                         set_child = &Viewport {
+                        },
+
+                        #[name = "shutter_flash"]
+                        add_overlay = &gtk::Box {
+                            set_css_classes: &["shutter-flash"],
+                            set_can_target: false,
                         },
 
                         add_overlay = &gtk::Label {
@@ -220,12 +271,14 @@ impl SimpleComponent for AppModel {
                                 set_icon_name: "zoom-out-symbolic",
                                 set_tooltip_text: Some(strings::ZOOM_OUT_TOOLTIP),
                                 set_has_frame: false,
+                                set_focusable: false,
                                 connect_clicked => Input::ZoomOut,
                             },
                             gtk::Button {
                                 set_icon_name: "zoom-in-symbolic",
                                 set_tooltip_text: Some(strings::ZOOM_IN_TOOLTIP),
                                 set_has_frame: false,
+                                set_focusable: false,
                                 connect_clicked => Input::ZoomIn,
                             },
                             gtk::Separator {
@@ -235,13 +288,25 @@ impl SimpleComponent for AppModel {
                                 set_icon_name: "object-flip-horizontal-symbolic",
                                 set_tooltip_text: Some(strings::MIRROR_H_TOOLTIP),
                                 set_has_frame: false,
+                                set_focusable: false,
                                 connect_clicked => Input::MirrorH,
                             },
                             gtk::Button {
                                 set_icon_name: "object-flip-vertical-symbolic",
                                 set_tooltip_text: Some(strings::MIRROR_V_TOOLTIP),
                                 set_has_frame: false,
+                                set_focusable: false,
                                 connect_clicked => Input::MirrorV,
+                            },
+                            gtk::Separator {
+                                set_orientation: gtk::Orientation::Vertical,
+                            },
+                            gtk::Button {
+                                set_icon_name: "camera-photo-symbolic",
+                                set_tooltip_text: Some(strings::SHUTTER_TOOLTIP),
+                                set_css_classes: &["circular", "shutter-button"],
+                                set_focusable: false,
+                                connect_clicked => Input::TakePhoto,
                             },
                             gtk::Separator {
                                 set_orientation: gtk::Orientation::Vertical,
@@ -250,12 +315,14 @@ impl SimpleComponent for AppModel {
                                 set_icon_name: "object-rotate-left-symbolic",
                                 set_tooltip_text: Some(strings::ROTATE_CCW_TOOLTIP),
                                 set_has_frame: false,
+                                set_focusable: false,
                                 connect_clicked => Input::RotateCcw,
                             },
                             gtk::Button {
                                 set_icon_name: "object-rotate-right-symbolic",
                                 set_tooltip_text: Some(strings::ROTATE_CW_TOOLTIP),
                                 set_has_frame: false,
+                                set_focusable: false,
                                 connect_clicked => Input::RotateCw,
                             },
                             gtk::Separator {
@@ -265,12 +332,14 @@ impl SimpleComponent for AppModel {
                                 set_icon_name: "weather-snow-symbolic",
                                 set_tooltip_text: Some(strings::FREEZE_TOOLTIP),
                                 set_has_frame: false,
+                                set_focusable: false,
                                 connect_clicked => Input::ToggleFreeze,
                                 #[watch]
                                 set_active: model.frozen,
                             },
                         },
                     },
+                },
                 },
             },
         }
@@ -283,6 +352,7 @@ impl SimpleComponent for AppModel {
     ) -> ComponentParts<Self> {
         if init.debug_overlay
             && let Some(settings) = gtk::Settings::default()
+            && settings.has_property("gtk-debug-overlay")
         {
             settings.set_property("gtk-debug-overlay", true);
         }
@@ -291,6 +361,16 @@ impl SimpleComponent for AppModel {
             let sender = sender.clone();
             Arc::new(move |event| sender.input(Input::Camera(event)))
         };
+
+        let cfg_path = config_path();
+        let config_outcome = load_config(&cfg_path);
+        let config_recovered = config_outcome.was_recovered();
+        let config = config_outcome.into_config();
+
+        let photos = PhotoService::new({
+            let sender = sender.clone();
+            move |outcome| sender.input(Input::PhotoDone(outcome))
+        });
 
         let camera = CameraService::new(&init.source, on_event);
         camera.frame_bus().set_ui_notify(Box::new({
@@ -316,11 +396,23 @@ impl SimpleComponent for AppModel {
             show_fps: cfg!(debug_assertions) || init.debug_overlay,
             fps_label: String::new(),
             frame_times: VecDeque::new(),
+            config,
+            config_path: cfg_path,
+            config_recovered,
+            photos,
+            toast_overlay: adw::ToastOverlay::new(),
+            shutter_flash: gtk::Box::new(gtk::Orientation::Vertical, 0),
+            pref_folder_row: None,
         };
         model.sync_menu();
 
         let widgets = view_output!();
         model.grab_widgets(&widgets);
+        if model.config_recovered {
+            model
+                .toast_overlay
+                .add_toast(adw::Toast::new(strings::CONFIG_RECOVERED));
+        }
 
         let mut group = RelmActionGroup::<WindowActionGroup>::new();
         group.add_action(
@@ -354,6 +446,8 @@ impl SimpleComponent for AppModel {
         view_action!(FreezeAction, Input::ToggleFreeze);
         view_action!(FullscreenAction, Input::ToggleFullscreen);
         view_action!(EscapeAction, Input::Escape);
+        view_action!(TakePhotoAction, Input::TakePhoto);
+        view_action!(PreferencesAction, Input::OpenPreferences);
         group.register_for_widget(root);
 
         // Shortcuts for the M2 actions (docs/CONVENTIONS.md §13).
@@ -369,11 +463,13 @@ impl SimpleComponent for AppModel {
         app.set_accelerators_for_action::<FreezeAction>(&["f", "F"]);
         app.set_accelerators_for_action::<FullscreenAction>(&["F11"]);
         app.set_accelerators_for_action::<EscapeAction>(&["Escape"]);
+        app.set_accelerators_for_action::<TakePhotoAction>(&["space"]);
+        app.set_accelerators_for_action::<PreferencesAction>(&["<Ctrl>comma"]);
 
         ComponentParts { model, widgets }
     }
 
-    fn update(&mut self, message: Self::Input, _sender: ComponentSender<Self>) {
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             Input::Camera(event) => {
                 self.camera.on_event(event);
@@ -427,6 +523,46 @@ impl SimpleComponent for AppModel {
                 if self.window.is_fullscreen() {
                     self.window.unfullscreen();
                 }
+            }
+            Input::TakePhoto => {
+                if self.state == CameraState::Streaming
+                    && let Some(frame) = self.viewport.photo_frame()
+                {
+                    if self
+                        .photos
+                        .take(&frame, &self.config.photo, self.photo_dir())
+                        .is_ok()
+                    {
+                        self.flash_shutter();
+                    } else {
+                        self.toast_overlay
+                            .add_toast(adw::Toast::new(strings::PHOTO_BUSY));
+                    }
+                }
+            }
+            Input::PhotoDone(outcome) => self.on_photo_done(outcome),
+            Input::OpenPreferences => self.open_preferences(&sender),
+            Input::SetPhotoFormat(sel) => {
+                self.config.photo.format = match sel {
+                    1 => PhotoFormat::Jpeg,
+                    _ => PhotoFormat::Png,
+                };
+                self.persist_config();
+            }
+            Input::SetPhotoResolution(sel) => {
+                self.config.photo.resolution = match sel {
+                    1 => PhotoResolution::X2,
+                    2 => PhotoResolution::X2p5,
+                    _ => PhotoResolution::Native,
+                };
+                self.persist_config();
+            }
+            Input::SetPhotoFolder(path) => {
+                self.config.photo.folder = Some(path);
+                if let Some(row) = &self.pref_folder_row {
+                    row.set_subtitle(&self.photo_dir().display().to_string());
+                }
+                self.persist_config();
             }
         }
     }
@@ -550,6 +686,9 @@ impl AppModel {
         }
         let menu = gio::Menu::new();
         menu.append_submenu(Some(strings::CAMERA_SUBMENU_LABEL), &cameras_menu);
+        menu.append_item(&RelmAction::<PreferencesAction>::to_menu_item(
+            strings::PREFERENCES_LABEL,
+        ));
         self.menu_model = menu.clone();
         self.menu_button.set_menu_model(Some(&menu));
         self.menu_button.set_visible(self.camera.has_camera_menu());
@@ -571,6 +710,136 @@ impl AppModel {
             tracing::debug!("rendered: {label}");
             self.fps_label = label;
         }
+    }
+
+    /// Directory photos are saved into (section 6.6): the configured
+    /// folder or the localized `Pictures/HiView` default.
+    fn photo_dir(&self) -> PathBuf {
+        self.config.photo.folder.clone().unwrap_or_else(|| {
+            glib::user_special_dir(glib::UserDirectory::Pictures).map_or_else(
+                || PathBuf::from("HiView"),
+                |pictures| pictures.join("HiView"),
+            )
+        })
+    }
+
+    /// Brief white flash over the video when a photo is taken.
+    fn flash_shutter(&self) {
+        self.shutter_flash.add_css_class("on");
+        let flash = self.shutter_flash.clone();
+        glib::timeout_add_local_once(Duration::from_millis(80), move || {
+            flash.remove_css_class("on");
+        });
+    }
+
+    /// Reports the outcome of a background photo save (section 6.6).
+    fn on_photo_done(&self, outcome: PhotoOutcome) {
+        match outcome {
+            PhotoOutcome::Saved(path) => {
+                tracing::info!("photo saved: {}", path.display());
+                let toast = adw::Toast::new(strings::PHOTO_SAVED);
+                toast.set_button_label(Some(strings::OPEN_BUTTON));
+                toast.set_timeout(6);
+                let window = self.window.clone();
+                toast.connect_button_clicked(move |_| {
+                    let file = gio::File::for_path(&path);
+                    gtk::FileLauncher::new(Some(&file)).launch(
+                        Some(&window),
+                        gio::Cancellable::NONE,
+                        |_| {},
+                    );
+                });
+                self.toast_overlay.add_toast(toast);
+            }
+            PhotoOutcome::Failed(reason) => {
+                tracing::error!("photo save failed: {reason}");
+                self.toast_overlay
+                    .add_toast(adw::Toast::new(strings::PHOTO_SAVE_FAILED));
+            }
+        }
+    }
+
+    /// Writes the current config off the UI thread (section 7).
+    fn persist_config(&self) {
+        let config = self.config.clone();
+        let path = self.config_path.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = save_config(&config, &path) {
+                tracing::error!("could not save config: {e}");
+            }
+        });
+    }
+
+    /// Builds and presents the preferences dialog (Fotos page).
+    fn open_preferences(&mut self, sender: &ComponentSender<Self>) {
+        let dialog = adw::PreferencesDialog::new();
+        dialog.set_title(strings::PREFERENCES_LABEL);
+        let page = adw::PreferencesPage::new();
+        page.set_title(strings::PREFS_PHOTOS_PAGE);
+        page.set_icon_name(Some("camera-photo-symbolic"));
+        let group = adw::PreferencesGroup::new();
+        group.set_title(strings::PREFS_PHOTOS_PAGE);
+
+        let format_row = adw::ComboRow::new();
+        format_row.set_title(strings::PREFS_FORMAT_LABEL);
+        format_row.set_model(Some(&gtk::StringList::new(&["PNG", "JPEG"])));
+        format_row.set_selected(match self.config.photo.format {
+            PhotoFormat::Png => 0,
+            PhotoFormat::Jpeg => 1,
+        });
+        format_row.connect_selected_notify({
+            let sender = sender.clone();
+            move |row| sender.input(Input::SetPhotoFormat(row.selected()))
+        });
+        group.add(&format_row);
+
+        let res_row = adw::ComboRow::new();
+        res_row.set_title(strings::PREFS_RESOLUTION_LABEL);
+        res_row.set_model(Some(&gtk::StringList::new(&[
+            strings::RES_NATIVE_LABEL,
+            strings::RES_1280_LABEL,
+            strings::RES_1600_LABEL,
+        ])));
+        res_row.set_selected(match self.config.photo.resolution {
+            PhotoResolution::Native => 0,
+            PhotoResolution::X2 => 1,
+            PhotoResolution::X2p5 => 2,
+        });
+        res_row.connect_selected_notify({
+            let sender = sender.clone();
+            move |row| sender.input(Input::SetPhotoResolution(row.selected()))
+        });
+        group.add(&res_row);
+
+        let folder_row = adw::ActionRow::new();
+        folder_row.set_title(strings::PREFS_FOLDER_LABEL);
+        folder_row.set_subtitle(&self.photo_dir().display().to_string());
+        let pick = gtk::Button::with_label(strings::PREFS_FOLDER_BUTTON);
+        pick.set_valign(gtk::Align::Center);
+        pick.connect_clicked({
+            let sender = sender.clone();
+            let window = self.window.clone();
+            move |_| {
+                gtk::FileDialog::new().select_folder(Some(&window), gio::Cancellable::NONE, {
+                    let sender = sender.clone();
+                    move |res| {
+                        if let Ok(file) = res
+                            && let Some(path) = file.path()
+                        {
+                            sender.input(Input::SetPhotoFolder(path));
+                        }
+                    }
+                });
+            }
+        });
+        folder_row.add_suffix(&pick);
+        folder_row.set_activatable_widget(Some(&pick));
+        group.add(&folder_row);
+        self.pref_folder_row = Some(folder_row);
+
+        page.add(&group);
+        dialog.add(&page);
+        dialog.present(Some(&self.window));
     }
 }
 

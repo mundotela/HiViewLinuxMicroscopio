@@ -4,3 +4,4 @@
 //! Application services (docs/CONVENTIONS.md §4).
 
 pub mod camera;
+pub mod photo;
