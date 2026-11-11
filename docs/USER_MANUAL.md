@@ -164,6 +164,8 @@ também um selo de ▶ e a duração. Fotos e vídeos feitos com o app
 aparecem na galeria automaticamente, sem precisar reabri-la.
 
 - **Clicar** em um item abre no aplicativo do sistema.
+- **Setas do teclado** navegam entre os itens e **Enter** abre o item
+  selecionado.
 - **Botão direito** em um item abre o menu: **Abrir**,
   **Mostrar na pasta** e **Mover para a lixeira** (pede confirmação;
   o arquivo pode ser recuperado da lixeira do sistema).
