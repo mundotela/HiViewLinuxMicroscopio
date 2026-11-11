@@ -17,9 +17,15 @@ use hiview_core::{
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
 use relm4::gtk::{self, gio, glib};
-use relm4::{ComponentParts, ComponentSender, SimpleComponent, adw};
+use relm4::{
+    Component, ComponentController, ComponentParts, ComponentSender, Controller, SimpleComponent,
+    adw,
+};
 
 use crate::cli::Args;
+use crate::components::gallery::{
+    GalleryInit, GalleryModel, Input as GalleryInput, Output as GalleryOutput,
+};
 use crate::services::camera::CameraService;
 use crate::services::photo::{PhotoOutcome, PhotoService};
 use crate::services::recorder::{ActiveRecording, StopReason, filesystem_free_bytes};
@@ -81,6 +87,24 @@ pub const GLOBAL_CSS: &str = ".fps-indicator {
 }
 .record-indicator image {
     color: #e01b24;
+}
+.gallery-tile {
+    margin: 6px;
+}
+.gallery-thumb {
+    background-color: rgba(0, 0, 0, 0.55);
+    border-radius: 8px;
+}
+.play-badge {
+    color: rgba(255, 255, 255, 0.92);
+}
+.thumb-badge {
+    background-color: rgba(0, 0, 0, 0.65);
+    color: #ffffff;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.8em;
+    font-weight: bold;
 }";
 
 /// Menu target value meaning "pick automatically".
@@ -108,6 +132,7 @@ relm4::new_stateless_action!(EscapeAction, WindowActionGroup, "escape");
 relm4::new_stateless_action!(TakePhotoAction, WindowActionGroup, "take-photo");
 relm4::new_stateless_action!(RecordAction, WindowActionGroup, "record");
 relm4::new_stateless_action!(PreferencesAction, WindowActionGroup, "preferences");
+relm4::new_stateless_action!(GalleryAction, WindowActionGroup, "gallery");
 
 /// Which capture the floating shutter button performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +202,12 @@ pub enum Input {
     SetPhotoResolution(u32),
     /// A new photo folder was picked in the preferences dialog.
     SetPhotoFolder(PathBuf),
+    /// Open the gallery page (`Ctrl+G` or the header button).
+    ToggleGallery,
+    /// The gallery page was popped off the navigation stack.
+    GalleryClosed,
+    /// The gallery asks for a toast on the shared overlay.
+    GalleryToast(&'static str),
 }
 
 /// Root component of the application.
@@ -241,6 +272,12 @@ pub struct AppModel {
     record_elapsed: String,
     /// Dropped-frame counter (debug overlay only).
     drops_label: String,
+    /// Navigation stack: live page plus the pushed gallery page (§6.8).
+    nav_view: adw::NavigationView,
+    /// Gallery page component, kept alive so reopening is instant.
+    gallery: Controller<GalleryModel>,
+    /// Whether the gallery page is currently pushed.
+    gallery_open: bool,
 }
 
 #[relm4::component(pub)]
@@ -255,24 +292,35 @@ impl SimpleComponent for AppModel {
             set_default_width: 960,
             set_default_height: 720,
 
+            #[name = "toast_overlay"]
             #[wrap(Some)]
-            set_content = &adw::ToolbarView {
-                add_top_bar = &adw::HeaderBar {
-                    #[name = "menu_button"]
-                    pack_end = &gtk::MenuButton {
-                        set_icon_name: "open-menu-symbolic",
-                        set_tooltip_text: Some(strings::CAMERA_MENU_TOOLTIP),
-                        set_visible: model.camera.has_camera_menu(),
-                        set_menu_model: Some(&model.menu_model),
-                    },
-                },
-
-                #[name = "toast_overlay"]
+            set_content = &adw::ToastOverlay {
+                #[name = "nav_view"]
                 #[wrap(Some)]
-                set_content = &adw::ToastOverlay {
-                    #[name = "content_stack"]
-                    #[wrap(Some)]
-                    set_child = &gtk::Stack {
+                set_child = &adw::NavigationView {
+                    add = &adw::NavigationPage {
+                        set_title: strings::APP_TITLE,
+
+                        #[wrap(Some)]
+                        set_child = &adw::ToolbarView {
+                            add_top_bar = &adw::HeaderBar {
+                                pack_end = &gtk::Button {
+                                    set_label: strings::GALLERY_BUTTON_LABEL,
+                                    set_tooltip_text: Some(strings::GALLERY_BUTTON_TOOLTIP),
+                                    connect_clicked => Input::ToggleGallery,
+                                },
+                                #[name = "menu_button"]
+                                pack_end = &gtk::MenuButton {
+                                    set_icon_name: "open-menu-symbolic",
+                                    set_tooltip_text: Some(strings::CAMERA_MENU_TOOLTIP),
+                                    set_visible: model.camera.has_camera_menu(),
+                                    set_menu_model: Some(&model.menu_model),
+                                },
+                            },
+
+                            #[name = "content_stack"]
+                            #[wrap(Some)]
+                            set_content = &gtk::Stack {
 
                     #[name = "searching_page"]
                     add_child = &adw::StatusPage {
@@ -469,6 +517,8 @@ impl SimpleComponent for AppModel {
                     },
                 },
                 },
+                },
+                },
             },
         }
     }
@@ -499,6 +549,14 @@ impl SimpleComponent for AppModel {
             let sender = sender.clone();
             move |outcome| sender.input(Input::PhotoDone(outcome))
         });
+
+        let gallery = GalleryModel::builder()
+            .launch(GalleryInit {
+                window: root.clone(),
+            })
+            .forward(sender.input_sender(), |out| match out {
+                GalleryOutput::Toast(text) => Input::GalleryToast(text),
+            });
 
         let camera = CameraService::new(&init.source, on_event);
         camera.frame_bus().set_ui_notify(Box::new({
@@ -542,11 +600,30 @@ impl SimpleComponent for AppModel {
             debug_overlay: init.debug_overlay,
             record_elapsed: String::new(),
             drops_label: strings::drops_label(0),
+            nav_view: adw::NavigationView::new(),
+            gallery,
+            gallery_open: false,
         };
         model.sync_menu();
 
         let widgets = view_output!();
         model.grab_widgets(&widgets);
+        model.nav_view = widgets.nav_view.clone();
+        model.nav_view.connect_popped({
+            let sender = sender.clone();
+            let gallery_page = model.gallery.widget().clone();
+            move |_, page| {
+                if page == &gallery_page {
+                    sender.input(Input::GalleryClosed);
+                }
+            }
+        });
+        // Benchmark aid for the M5 report (§11.0): opens the gallery as
+        // soon as the window is up so timings can be sampled from logs.
+        if std::env::var_os("HIVIEW_OPEN_GALLERY").is_some() {
+            let sender = sender.clone();
+            glib::idle_add_local_once(move || sender.input(Input::ToggleGallery));
+        }
         // Debug aid (M4 orphan-overlay bug): log the actual widget tree
         // so a toast targeting an off-screen overlay is visible in logs.
         dump_widget_tree(&root, 0);
@@ -589,6 +666,7 @@ impl SimpleComponent for AppModel {
         view_action!(TakePhotoAction, Input::TakePhoto);
         view_action!(RecordAction, Input::ToggleRecord);
         view_action!(PreferencesAction, Input::OpenPreferences);
+        view_action!(GalleryAction, Input::ToggleGallery);
 
         // The window must finalize a running recording (EOS sequence)
         // before it may close — see Input::CloseRequested.
@@ -636,6 +714,7 @@ impl SimpleComponent for AppModel {
         app.set_accelerators_for_action::<TakePhotoAction>(&["space"]);
         app.set_accelerators_for_action::<RecordAction>(&["r", "R"]);
         app.set_accelerators_for_action::<PreferencesAction>(&["<Ctrl>comma"]);
+        app.set_accelerators_for_action::<GalleryAction>(&["<Ctrl>g"]);
 
         ComponentParts { model, widgets }
     }
@@ -726,6 +805,8 @@ impl SimpleComponent for AppModel {
                     self.drops_label = strings::drops_label(
                         active.recorder.dropped_frames() + active.recorder.rejected_frames(),
                     );
+                    self.gallery
+                        .emit(GalleryInput::RecordElapsed(self.record_elapsed.clone()));
                     Self::schedule_record_tick(&sender);
                 }
             }
@@ -769,7 +850,13 @@ impl SimpleComponent for AppModel {
                     row.set_subtitle(&self.photo_dir().display().to_string());
                 }
                 self.persist_config();
+                self.refresh_gallery();
             }
+            Input::ToggleGallery => self.open_gallery(),
+            Input::GalleryClosed => {
+                self.gallery_open = false;
+            }
+            Input::GalleryToast(text) => self.show_toast(adw::Toast::new(text)),
         }
     }
 }
@@ -935,6 +1022,46 @@ impl AppModel {
         })
     }
 
+    /// Directory videos are saved into (section 6.7): `Videos/HiView`.
+    fn video_dir(&self) -> PathBuf {
+        glib::user_special_dir(glib::UserDirectory::Videos)
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("HiView")
+    }
+
+    /// Pushes the gallery page over the live view (F13/F14, §6.8). The
+    /// camera pipeline is untouched, so returning has no reconnect
+    /// delay.
+    fn open_gallery(&mut self) {
+        if self.gallery_open {
+            return;
+        }
+        self.gallery_open = true;
+        // Refresh also triggers a rescan inside the gallery component.
+        self.gallery.emit(GalleryInput::Refresh {
+            photo_dir: self.photo_dir(),
+            video_dir: self.video_dir(),
+        });
+        // If a recording is already in flight the gallery must show the
+        // indicator and the "Gravando…" tile right away.
+        if let Some(active) = &self.recording {
+            self.gallery.emit(GalleryInput::RecordingStarted(
+                active.recorder.path().to_path_buf(),
+            ));
+            self.gallery
+                .emit(GalleryInput::RecordElapsed(self.record_elapsed.clone()));
+        }
+        self.nav_view.push(self.gallery.widget());
+    }
+
+    /// Points the gallery at the current media folders and rescans.
+    fn refresh_gallery(&self) {
+        self.gallery.emit(GalleryInput::Refresh {
+            photo_dir: self.photo_dir(),
+            video_dir: self.video_dir(),
+        });
+    }
+
     /// Shows a toast, dismissing whatever is displayed first. Without
     /// this, `adw::ToastOverlay` queues the new toast behind the current
     /// one — and a persistent (`timeout` = 0) toast would hide every
@@ -1091,11 +1218,16 @@ impl AppModel {
             }
             Ok(recorder) => {
                 tracing::info!("recording started");
+                self.gallery.emit(GalleryInput::RecordingStarted(
+                    recorder.path().to_path_buf(),
+                ));
                 self.recording = Some(ActiveRecording {
                     recorder,
                     started: Instant::now(),
                 });
                 self.record_elapsed = strings::elapsed_label(0);
+                self.gallery
+                    .emit(GalleryInput::RecordElapsed(self.record_elapsed.clone()));
                 Self::schedule_record_tick(sender);
             }
             Err(err) => {
@@ -1112,6 +1244,13 @@ impl AppModel {
     /// finalize was triggered by the window closing.
     fn on_record_stopped(&mut self, stop: RecordStop) {
         self.record_transition = false;
+        // FileSaved first so the "Gravando…" tile morphs into the
+        // finished video in place; RecordingEnded is then a no-op.
+        if stop.error.is_none() {
+            self.gallery
+                .emit(GalleryInput::FileSaved(stop.path.clone()));
+        }
+        self.gallery.emit(GalleryInput::RecordingEnded);
         let reason = self.stop_reason.take();
         match stop.error {
             Some(err) => {
@@ -1205,6 +1344,7 @@ impl AppModel {
         match outcome {
             PhotoOutcome::Saved(path) => {
                 tracing::info!("photo saved: {}", path.display());
+                self.gallery.emit(GalleryInput::FileSaved(path.clone()));
                 let toast = adw::Toast::new(strings::PHOTO_SAVED);
                 toast.set_button_label(Some(strings::OPEN_BUTTON));
                 toast.set_timeout(6);

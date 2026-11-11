@@ -8,6 +8,7 @@
 
 mod app;
 mod cli;
+mod components;
 mod services;
 mod strings;
 mod toast;
