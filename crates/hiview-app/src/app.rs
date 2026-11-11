@@ -214,6 +214,9 @@ pub struct AppModel {
     /// Background photo encode/write worker (section 7).
     photos: PhotoService,
     toast_overlay: adw::ToastOverlay,
+    /// The toast currently on screen; dismissed before showing a new
+    /// one so a persistent toast can never hide the queue behind it.
+    current_toast: Option<adw::Toast>,
     shutter_flash: gtk::Box,
     /// Folder row of the open preferences dialog, to refresh its subtitle.
     pref_folder_row: Option<adw::ActionRow>,
@@ -525,6 +528,7 @@ impl SimpleComponent for AppModel {
             config_recovered,
             photos,
             toast_overlay: adw::ToastOverlay::new(),
+            current_toast: None,
             shutter_flash: gtk::Box::new(gtk::Orientation::Vertical, 0),
             pref_folder_row: None,
             mode_video_btn: gtk::ToggleButton::new(),
@@ -543,9 +547,7 @@ impl SimpleComponent for AppModel {
         let widgets = view_output!();
         model.grab_widgets(&widgets);
         if model.config_recovered {
-            model
-                .toast_overlay
-                .add_toast(adw::Toast::new(strings::CONFIG_RECOVERED));
+            model.show_toast(adw::Toast::new(strings::CONFIG_RECOVERED));
         }
 
         let mut group = RelmActionGroup::<WindowActionGroup>::new();
@@ -924,6 +926,29 @@ impl AppModel {
         })
     }
 
+    /// Shows a toast, dismissing whatever is displayed first. Without
+    /// this, `adw::ToastOverlay` queues the new toast behind the current
+    /// one — and a persistent (`timeout` = 0) toast would hide every
+    /// later toast forever, which is exactly what swallowed the
+    /// recording-end toasts in M4 review.
+    fn show_toast(&mut self, toast: adw::Toast) {
+        if let Some(current) = self.current_toast.take() {
+            current.dismiss();
+        }
+        // Diagnostic for manual testing: distinguishes "never shown"
+        // from "shown but expired before the user looked".
+        let shown = Instant::now();
+        toast.connect_dismissed(move |t| {
+            tracing::debug!(
+                "toast dismissed: {:?} after {:?}",
+                t.title(),
+                shown.elapsed()
+            );
+        });
+        self.current_toast = Some(toast.clone());
+        self.toast_overlay.add_toast(toast);
+    }
+
     /// Brief white flash over the video when a photo is taken.
     fn flash_shutter(&self) {
         self.shutter_flash.add_css_class("on");
@@ -935,7 +960,7 @@ impl AppModel {
 
     /// Takes a photo from the frozen/latest frame (section 6.6). Works
     /// while recording — photos are still allowed (M4).
-    fn take_photo(&self) {
+    fn take_photo(&mut self) {
         if self.state == CameraState::Streaming
             && let Some(frame) = self.viewport.photo_frame()
         {
@@ -946,8 +971,7 @@ impl AppModel {
             {
                 self.flash_shutter();
             } else {
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(strings::PHOTO_BUSY));
+                self.show_toast(adw::Toast::new(strings::PHOTO_BUSY));
             }
         }
     }
@@ -967,8 +991,7 @@ impl AppModel {
             return;
         }
         if !self.rec_supported {
-            self.toast_overlay
-                .add_toast(adw::Toast::new(strings::REC_UNSUPPORTED));
+            self.show_toast(adw::Toast::new(strings::REC_UNSUPPORTED));
             return;
         }
         // Probe the XDG Videos root: the same filesystem as HiView/, and
@@ -979,14 +1002,12 @@ impl AppModel {
             Ok(()) => {}
             Err(RecordDenied::LowDiskSpace { free_mb }) => {
                 tracing::warn!("recording refused: {free_mb} MB free");
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(strings::REC_LOW_DISK));
+                self.show_toast(adw::Toast::new(strings::REC_LOW_DISK));
                 return;
             }
             Err(RecordDenied::FreeSpaceUnknown) => {
                 tracing::warn!("recording refused: free space unknown");
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(strings::REC_LOW_DISK));
+                self.show_toast(adw::Toast::new(strings::REC_LOW_DISK));
                 return;
             }
         }
@@ -1071,8 +1092,7 @@ impl AppModel {
             }
             Err(err) => {
                 tracing::error!("recording failed to start: {err}");
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(strings::VIDEO_SAVE_FAILED));
+                self.show_toast(adw::Toast::new(strings::VIDEO_SAVE_FAILED));
             }
         }
         if self.quit_pending {
@@ -1092,8 +1112,7 @@ impl AppModel {
                 if let Err(e) = std::fs::remove_file(&stop.path) {
                     tracing::warn!("could not remove broken video: {e}");
                 }
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(strings::VIDEO_SAVE_FAILED));
+                self.show_toast(adw::Toast::new(strings::VIDEO_SAVE_FAILED));
             }
             None if reason == Some(StopReason::Disconnected) => {
                 tracing::info!(
@@ -1105,7 +1124,7 @@ impl AppModel {
                 // expire unwatched.
                 let toast = adw::Toast::new(strings::REC_ENDED_DISCONNECTED);
                 toast.set_timeout(0);
-                self.toast_overlay.add_toast(toast);
+                self.show_toast(toast);
             }
             None => {
                 tracing::info!(
@@ -1128,7 +1147,7 @@ impl AppModel {
                         |_| {},
                     );
                 });
-                self.toast_overlay.add_toast(toast);
+                self.show_toast(toast);
             }
         }
         if self.quit_pending {
@@ -1174,7 +1193,7 @@ impl AppModel {
     }
 
     /// Reports the outcome of a background photo save (section 6.6).
-    fn on_photo_done(&self, outcome: PhotoOutcome) {
+    fn on_photo_done(&mut self, outcome: PhotoOutcome) {
         match outcome {
             PhotoOutcome::Saved(path) => {
                 tracing::info!("photo saved: {}", path.display());
@@ -1190,12 +1209,11 @@ impl AppModel {
                         |_| {},
                     );
                 });
-                self.toast_overlay.add_toast(toast);
+                self.show_toast(toast);
             }
             PhotoOutcome::Failed(reason) => {
                 tracing::error!("photo save failed: {reason}");
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(strings::PHOTO_SAVE_FAILED));
+                self.show_toast(adw::Toast::new(strings::PHOTO_SAVE_FAILED));
             }
         }
     }
