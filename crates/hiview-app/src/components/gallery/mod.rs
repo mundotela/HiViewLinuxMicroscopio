@@ -9,6 +9,7 @@
 
 mod entry;
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -17,7 +18,7 @@ use std::time::Instant;
 use entry::{GalleryEntry, build_tile};
 use hiview_core::{MediaItem, insertion_index, scan_media};
 use relm4::adw::prelude::*;
-use relm4::gtk::{self, gdk, gio, glib};
+use relm4::gtk::{self, gdk, gio, glib, graphene};
 use relm4::{ComponentParts, ComponentSender, SimpleComponent, adw};
 
 use crate::services::gallery::{ThumbOutcome, ThumbRejected, ThumbService};
@@ -226,17 +227,26 @@ impl SimpleComponent for GalleryModel {
         let grid_view = widgets.grid_view.clone();
 
         // Grid plumbing: store → selection → factory → view.
+        // Tile-root pointer → entry, so the grid-level context menu can
+        // map a hit-tested row back to the model (GTK 4.14's
+        // `GtkListItemWidget` is private — no `item` accessor to bind).
+        let tile_entries: Rc<RefCell<HashMap<usize, GalleryEntry>>> =
+            Rc::new(RefCell::new(HashMap::new()));
         let selection =
             gtk::SingleSelection::new(Some(model.store.clone().upcast::<gio::ListModel>()));
         let factory = gtk::SignalListItemFactory::new();
-        factory.connect_setup(|_, item| {
-            if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
-                item.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
+        factory.connect_setup({
+            let grid_view = grid_view.clone();
+            move |_, item| {
+                if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
+                    item.set_child(Some(&gtk::Box::new(gtk::Orientation::Vertical, 0)));
+                }
+                strip_item_targets(&grid_view);
             }
         });
         factory.connect_bind({
-            let sender = sender.clone();
             let grid_view = grid_view.clone();
+            let tile_entries = tile_entries.clone();
             move |_, item| {
                 let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
                     return;
@@ -247,18 +257,31 @@ impl SimpleComponent for GalleryModel {
                 else {
                     return;
                 };
-                let tile = build_tile(&entry, &sender, &grid_view);
+                let tile = build_tile();
+                let root_ptr = tile.root.clone().upcast::<glib::Object>().as_ptr() as usize;
                 item.set_child(Some(&tile.root));
                 entry.set_tile(Rc::new(tile));
+                tile_entries.borrow_mut().insert(root_ptr, entry);
+                strip_item_targets(&grid_view);
             }
         });
-        factory.connect_unbind(|_, item| {
-            let entry = item
-                .downcast_ref::<gtk::ListItem>()
-                .and_then(|item| item.item())
-                .and_then(|object| object.downcast::<GalleryEntry>().ok());
-            if let Some(entry) = entry {
-                entry.clear_tile();
+        factory.connect_unbind({
+            let tile_entries = tile_entries.clone();
+            move |_, item| {
+                if let Some(child) = item
+                    .downcast_ref::<gtk::ListItem>()
+                    .and_then(|item| item.child())
+                {
+                    let key = child.upcast::<glib::Object>().as_ptr() as usize;
+                    tile_entries.borrow_mut().remove(&key);
+                }
+                let entry = item
+                    .downcast_ref::<gtk::ListItem>()
+                    .and_then(|item| item.item())
+                    .and_then(|object| object.downcast::<GalleryEntry>().ok());
+                if let Some(entry) = entry {
+                    entry.clear_tile();
+                }
             }
         });
         grid_view.set_model(Some(&selection));
@@ -267,6 +290,36 @@ impl SimpleComponent for GalleryModel {
             let sender = sender.clone();
             move |_, position| sender.input(Input::Activate(position))
         });
+        strip_item_targets(&grid_view);
+
+        // One right-click gesture on the permanent grid — never on a
+        // tile. Tiles and ListItemWidgets are untargetable (they are
+        // unparented when recycled, and crossing events over a dead
+        // widget chain log `Gtk-CRITICAL gtk_widget_compute_point`).
+        let click = gtk::GestureClick::new();
+        click.set_button(gdk::BUTTON_SECONDARY);
+        click.connect_pressed({
+            let grid_view = grid_view.clone();
+            let tile_entries = tile_entries.clone();
+            let sender = sender.clone();
+            move |gesture, _, x, y| {
+                let Some(entry) = entry_at_point(&grid_view, x, y, &tile_entries) else {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                };
+                if entry.is_recording() {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                }
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                sender.input(Input::ContextMenu {
+                    path: entry.path(),
+                    x,
+                    y,
+                });
+            }
+        });
+        grid_view.add_controller(click);
 
         // One shared context-menu popover for the whole page, parented
         // to the grid (never to a recyclable tile).
@@ -676,4 +729,51 @@ impl GalleryModel {
         }));
         sender.output_sender().emit(Output::Toast(strings::TRASHED));
     }
+}
+
+/// `set_can_target(false)` on every `ListItemWidget` the grid owns.
+/// Recycled list-item widgets are unparented on the fly — if one is
+/// the pointer's target when that happens, GTK synthesizes crossing
+/// events over a dead widget chain and logs `Gtk-CRITICAL
+/// gtk_widget_compute_point`. Keeping the pointer on the permanent
+/// grid avoids the whole class of failure.
+fn strip_item_targets(grid: &gtk::GridView) {
+    let mut child = grid.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        widget.set_can_target(false);
+        child = next;
+    }
+}
+
+/// Entry under the grid point `(x, y)` — a manual hit-test over the
+/// visible `ListItemWidget`s, since tiles are not pointer targets.
+/// The link back to the model is the tile-root → entry map populated
+/// at bind time (GTK 4.14's `GtkListItemWidget` is private, so the
+/// tile root — the widget's first child — is the key).
+fn entry_at_point(
+    grid: &gtk::GridView,
+    x: f64,
+    y: f64,
+    tile_entries: &Rc<RefCell<HashMap<usize, GalleryEntry>>>,
+) -> Option<GalleryEntry> {
+    let point = graphene::Point::new(x as f32, y as f32);
+    let mut hit = None;
+    let mut child = grid.first_child();
+    while let Some(widget) = child {
+        let next = widget.next_sibling();
+        if let Some(bounds) = widget.compute_bounds(grid)
+            && bounds.contains_point(&point)
+        {
+            hit = widget.first_child();
+            break;
+        }
+        child = next;
+    }
+    hit.and_then(|root| {
+        tile_entries
+            .borrow()
+            .get(&(root.upcast::<glib::Object>().as_ptr() as usize))
+            .cloned()
+    })
 }

@@ -14,12 +14,10 @@ use std::time::SystemTime;
 
 use gtk::glib;
 use gtk::glib::subclass::prelude::*;
-use gtk::{gdk, graphene, prelude::*};
-use relm4::ComponentSender;
+use gtk::{gdk, prelude::*};
 
 use hiview_core::{MediaItem, MediaKind};
 
-use super::{GalleryModel, Input};
 use crate::strings;
 
 /// Everything shown on one tile.
@@ -334,17 +332,32 @@ impl GalleryEntry {
 const TILE_WIDTH: i32 = 200;
 const TILE_HEIGHT: i32 = 150;
 
-/// Builds one tile widget tree for `entry`: thumbnail stack, badges,
-/// date line and a right-click gesture that reports a
-/// [`Input::ContextMenu`] to the shared page-level popover — the menu
-/// is never parented to a recyclable tile (M5 review: a popover whose
-/// parent tile was recycled kept a dead grab and swallowed all clicks,
-/// including the trash dialog's buttons).
-pub(crate) fn build_tile(
-    entry: &GalleryEntry,
-    sender: &ComponentSender<GalleryModel>,
-    grid: &gtk::GridView,
-) -> TileWidgets {
+/// Builds one tile widget tree for `entry`: thumbnail stack, badges
+/// and date line. Pointer interaction lives on the permanent
+/// `GridView` (activation + a single context-menu gesture that
+/// hit-tests rows manually) — a gesture or popover parented to a
+/// recyclable tile kept a dead grab that swallowed clicks, including
+/// the trash dialog's buttons (M5 review).
+///
+/// Every widget in the tile is also made untargetable: tiles are
+/// recycled (unparented) while scrolling, and GTK synthesizes crossing
+/// events over whatever widget the pointer last touched — a dead
+/// widget chain logs `Gtk-CRITICAL gtk_widget_compute_point`.
+pub(crate) fn build_tile() -> TileWidgets {
+    /// `set_can_target(false)` for `widget` and every descendant.
+    /// Tiles are unparented during recycling — they must never be the
+    /// pointer's event target, or GTK synthesizes crossing events over
+    /// a dead widget chain (`Gtk-CRITICAL gtk_widget_compute_point`).
+    fn untargetable(widget: &gtk::Widget) {
+        widget.set_can_target(false);
+        let mut child = widget.first_child();
+        while let Some(child_widget) = child {
+            let next = child_widget.next_sibling();
+            untargetable(&child_widget);
+            child = next;
+        }
+    }
+
     let stack = gtk::Stack::new();
     stack.set_size_request(TILE_WIDTH, TILE_HEIGHT);
     stack.add_css_class("gallery-thumb");
@@ -399,34 +412,7 @@ pub(crate) fn build_tile(
     root.append(&overlay);
     root.append(&date);
 
-    // Right-click reports the path + position to the component, which
-    // opens the shared popover (parented to the grid). The gesture is
-    // always wired — the "Gravando…" tile morphs into a normal tile in
-    // place, so the state is re-checked on every press.
-    {
-        let click = gtk::GestureClick::new();
-        click.set_button(gdk::BUTTON_SECONDARY);
-        let entry = entry.clone();
-        let grid = grid.clone();
-        let anchor = root.clone();
-        let sender = sender.clone();
-        click.connect_pressed(move |gesture, _, x, y| {
-            if entry.is_recording() {
-                return;
-            }
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            let (gx, gy) = anchor
-                .compute_point(&grid, &graphene::Point::new(x as f32, y as f32))
-                .map(|p| (f64::from(p.x()), f64::from(p.y())))
-                .unwrap_or((x, y));
-            sender.input(Input::ContextMenu {
-                path: entry.path(),
-                x: gx,
-                y: gy,
-            });
-        });
-        root.add_controller(click);
-    }
+    untargetable(root.upcast_ref());
 
     TileWidgets {
         root,
@@ -441,6 +427,7 @@ pub(crate) fn build_tile(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gtk::gio;
 
     fn item(path: &str) -> MediaItem {
         MediaItem {
