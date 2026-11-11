@@ -1081,8 +1081,12 @@ impl AppModel {
                     "recording finalized after disconnect: {}",
                     stop.path.display()
                 );
-                self.toast_overlay
-                    .add_toast(adw::Toast::new(strings::REC_ENDED_DISCONNECTED));
+                // Persistent: the user must actually see this — the
+                // disconnected StatusPage is up, so a 5 s toast would
+                // expire unwatched.
+                let toast = adw::Toast::new(strings::REC_ENDED_DISCONNECTED);
+                toast.set_timeout(0);
+                self.toast_overlay.add_toast(toast);
             }
             None => {
                 tracing::info!(
@@ -1093,7 +1097,9 @@ impl AppModel {
                 );
                 let toast = adw::Toast::new(strings::VIDEO_SAVED);
                 toast.set_button_label(Some(strings::OPEN_BUTTON));
-                toast.set_timeout(6);
+                // Persistent: the "Abrir" action must still be there
+                // when the user comes back to the window.
+                toast.set_timeout(0);
                 let window = self.window.clone();
                 toast.connect_button_clicked(move |_| {
                     let file = gio::File::for_path(&stop.path);
