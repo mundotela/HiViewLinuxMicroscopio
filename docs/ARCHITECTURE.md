@@ -227,16 +227,18 @@ Searching ──found──► Starting ──PLAYING──► Streaming
 ```
 appsrc name=src is-live=true format=time caps=video/x-raw,format=RGBA,width=W,height=H,framerate=30/1
   ! videoconvert ! video/x-raw,format=I420
-  ! x264enc tune=zerolatency speed-preset=veryfast bitrate=2500
+  ! x264enc tune=zerolatency speed-preset=superfast threads=1 bitrate=2500
   ! video/x-h264,profile=constrained-baseline
   ! h264parse ! mp4mux ! filesink location=<arquivo>.mp4
 ```
 
 - **Perfil obrigatório: constrained-baseline.** O único decodificador H.264 do sistema (`openh264dec`) não lê outros perfis. Sem isso, os vídeos não abririam no Totem nem gerariam miniatura na galeria (M5). O teste de integração do M4 deve decodificar o arquivo gravado com `openh264dec`.
-- **Encoder:** `x264enc` (gstreamer1.0-plugins-ugly). Fallback em tempo de execução para `openh264enc`, que já gera baseline. Se nenhum existir, o botão de gravar fica desabilitado, com explicação.
+- **Encoder:** `x264enc` com `superfast` e `threads=1`, porque `veryfast` estourava o orçamento de CPU (medido no M4: veryfast ~15,6%, superfast ~10,3%, openh264enc ~7,3% de um núcleo; o `openh264enc` fica como opção futura). `x264enc` vem do gstreamer1.0-plugins-ugly. Fallback em tempo de execução para `openh264enc`, que já gera baseline. Se nenhum existir, o botão de gravar fica desabilitado, com explicação.
 - **PTS:** o PTS de captura é rebaseado para zero no início da gravação. Não usar `do-timestamp` no appsrc.
+- **Índice reservado e atualizado (obrigatório, decisão do M4):** `mp4mux reserved-max-duration=5 min` + `reserved-moov-update-period=1 s`. O índice (`moov`) fica no início do arquivo e é reescrito a cada segundo, então uma gravação interrompida por travamento, `kill -9` ou falta de energia continua reproduzível, com a duração real menos ~1 s. A reserva de 5 min **não limita** a duração: gravações mais longas finalizam normalmente (provado em teste com uma reserva de 10 s e gravação de 20 s, e no aparelho com 6 min 06 s). Reservas maiores foram rejeitadas porque pré-alocam espaço fixo em todo arquivo (2 h ≈ 8 MB, o que inflava clipes curtos para ~5,8 Mbit/s). Motivo da decisão: no teste do M4, um vídeo de 2 min ficou irrecuperável (sem `moov`) depois de um `Ctrl+C`.
+- **Desconexão durante a gravação:** erro ou desconexão da câmera finaliza a gravação na hora (EOS), tira o app do estado "gravando" e mostra um aviso. Uma reconexão **nunca** retoma a gravação sozinha.
 - **Parada correta:** `appsrc.end_of_stream()`, depois **esperar `EOS` no bus** (timeout de 5 s), e só então ir para `Null`. ⚠️ Sem isso o MP4 fica sem o átomo `moov` e **não abre**.
-- Fechar o app durante uma gravação executa a mesma sequência antes de sair.
+- Fechar o app durante uma gravação executa a mesma sequência antes de sair. O mesmo vale para **SIGINT (Ctrl+C) e SIGTERM** (logout ou desligamento).
 - Antes de iniciar, verifica o espaço livre. Abaixo de 500 MB, avisa e não inicia.
 - Destino: `glib::user_special_dir(UserDirectory::Videos)/HiView/`, nome `HiView_AAAA-MM-DD_HH-MM-SS.mp4`.
 - Indicador de tempo de gravação e contador de quadros descartados (este só no modo Bancada).
