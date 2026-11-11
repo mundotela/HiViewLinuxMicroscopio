@@ -595,6 +595,25 @@ impl SimpleComponent for AppModel {
         });
         group.register_for_widget(root);
 
+        // Ctrl+C and logout send SIGINT/SIGTERM; both run the same
+        // finalize-then-quit path as the window close request. glib's
+        // Rust bindings don't expose `g_unix_signal_add`, hence
+        // `signal-hook` (see report §6).
+        match signal_hook::iterator::Signals::new([
+            signal_hook::consts::SIGINT,
+            signal_hook::consts::SIGTERM,
+        ]) {
+            Ok(mut signals) => {
+                let sender = sender.clone();
+                std::thread::spawn(move || {
+                    if signals.forever().next().is_some() {
+                        sender.input(Input::CloseRequested);
+                    }
+                });
+            }
+            Err(err) => tracing::warn!("cannot install signal handlers: {err}"),
+        }
+
         // Shortcuts for the M2 actions (docs/CONVENTIONS.md §13).
         let app = relm4::main_adw_application();
         app.set_accelerators_for_action::<ZoomInAction>(&["plus", "equal", "KP_Add"]);
