@@ -147,13 +147,13 @@ impl Drop for CapturePipeline {
     }
 }
 
-fn make(name: &'static str) -> Result<gst::Element, Error> {
+pub(crate) fn make(name: &'static str) -> Result<gst::Element, Error> {
     gst::ElementFactory::make(name)
         .build()
         .map_err(|source| Error::ElementUnavailable { name, source })
 }
 
-fn caps_filter(caps: gst::Caps) -> Result<gst::Element, Error> {
+pub(crate) fn caps_filter(caps: gst::Caps) -> Result<gst::Element, Error> {
     let filter = make("capsfilter")?;
     filter.set_property("caps", &caps);
     Ok(filter)

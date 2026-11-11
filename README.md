@@ -24,6 +24,11 @@ sudo apt install libgtk-4-dev libadwaita-1-dev \
     gstreamer1.0-plugins-ugly gstreamer1.0-tools
 ```
 
+`gstreamer1.0-plugins-ugly` fornece o `x264enc` (encoder H.264 da gravação)
+e `gstreamer1.0-plugins-bad` fornece `openh264enc`/`openh264dec`,
+`mp4mux`, `h264parse` e `qtdemux`. Sem encoder H.264 o botão de gravar
+fica desabilitado.
+
 Para verificar se o ambiente está completo:
 
 ```bash

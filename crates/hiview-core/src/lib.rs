@@ -18,7 +18,7 @@ pub use devices::{KNOWN_MICROSCOPES, KnownMicroscope, is_known_microscope};
 pub use error::{Error, Result};
 pub use imaging::{
     JPEG_QUALITY, PhotoFormat, PhotoResolution, encode_photo, photo_filename, rgba_image,
-    save_photo, unique_photo_path,
+    save_photo, unique_photo_path, video_filename,
 };
 pub use orientation::{Orientation, ViewOrientation};
 pub use view::{MAX_SCALE, MIN_SCALE, NEAREST_FILTER_SCALE, Point, Size, ViewMode, ViewTransform};

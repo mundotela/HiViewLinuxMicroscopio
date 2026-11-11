@@ -118,3 +118,53 @@ pub const RES_1600_LABEL: &str = "1600×1200 (interpolada)";
 
 /// Toast shown when the photo queue is full and a shot is dropped.
 pub const PHOTO_BUSY: &str = "Salvando fotos, aguarde…";
+
+/// Tooltip of the photo-mode toolbar toggle.
+pub const MODE_PHOTO_TOOLTIP: &str = "Modo foto";
+
+/// Tooltip of the video-mode toolbar toggle.
+pub const MODE_VIDEO_TOOLTIP: &str = "Modo vídeo — aperte R para gravar";
+
+/// Tooltip of the video-mode toggle when no H.264 encoder exists.
+pub const MODE_VIDEO_UNAVAILABLE_TOOLTIP: &str =
+    "Gravação indisponível: codificador H.264 não encontrado";
+
+/// Tooltip of the shutter button in video mode, idle (`R`).
+pub const RECORD_START_TOOLTIP: &str = "Iniciar gravação (R)";
+
+/// Tooltip of the shutter button while recording (`R`).
+pub const RECORD_STOP_TOOLTIP: &str = "Parar gravação (R)";
+
+/// Toast shown after a video is written.
+pub const VIDEO_SAVED: &str = "Vídeo salvo";
+
+/// Toast shown when a video could not be finalized.
+pub const VIDEO_SAVE_FAILED: &str = "Não foi possível salvar o vídeo";
+
+/// Toast shown when recording ends because the camera disappeared.
+pub const REC_ENDED_DISCONNECTED: &str = "Gravação encerrada: microscópio desconectado";
+
+/// Toast shown when the disk-space gate refuses a recording.
+pub const REC_LOW_DISK: &str = "Espaço em disco insuficiente para gravar (mínimo 500 MB)";
+
+/// Toast shown when no H.264 encoder is installed at all.
+pub const REC_UNSUPPORTED: &str = "Gravação indisponível: codificador H.264 não encontrado";
+
+/// Dropped-frame counter shown with `--debug-overlay` while recording.
+pub fn drops_label(dropped: u64) -> String {
+    format!("{dropped} quadros perdidos")
+}
+
+/// Elapsed recording time as `M:SS` (or `H:MM:SS` past one hour).
+pub fn elapsed_label(seconds: u64) -> String {
+    if seconds >= 3600 {
+        format!(
+            "{}:{:02}:{:02}",
+            seconds / 3600,
+            seconds % 3600 / 60,
+            seconds % 60
+        )
+    } else {
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+}
