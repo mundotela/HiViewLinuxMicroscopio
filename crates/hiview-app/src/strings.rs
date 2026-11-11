@@ -49,3 +49,27 @@ pub const CAMERA_SUBMENU_LABEL: &str = "Câmera";
 
 /// Menu label for the known microscope.
 pub const MICROSCOPE_LABEL: &str = "Microscópio (05e3:f12a)";
+
+/// Tooltip of the zoom-in toolbar button (`+`).
+pub const ZOOM_IN_TOOLTIP: &str = "Aproximar (+)";
+
+/// Tooltip of the zoom-out toolbar button (`-`).
+pub const ZOOM_OUT_TOOLTIP: &str = "Afastar (-)";
+
+/// Tooltip of the horizontal-mirror toolbar button (`H`).
+pub const MIRROR_H_TOOLTIP: &str = "Espelhar horizontalmente (H)";
+
+/// Tooltip of the vertical-mirror toolbar button (`V`).
+pub const MIRROR_V_TOOLTIP: &str = "Espelhar verticalmente (V)";
+
+/// Tooltip of the rotate-counterclockwise toolbar button (`[`).
+pub const ROTATE_CCW_TOOLTIP: &str = "Girar 90° para a esquerda ([)";
+
+/// Tooltip of the rotate-clockwise toolbar button (`]`).
+pub const ROTATE_CW_TOOLTIP: &str = "Girar 90° para a direita (])";
+
+/// Tooltip of the freeze toolbar button (`F`).
+pub const FREEZE_TOOLTIP: &str = "Congelar a imagem (F)";
+
+/// Badge shown on top of the frozen frame.
+pub const FROZEN_BADGE: &str = "CONGELADO";

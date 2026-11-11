@@ -10,6 +10,7 @@ use hiview_capture::{
     CameraDescriptor, CameraEvent, CameraState, CapturePipeline, CaptureSource, DeviceWatcher,
     Error, FrameBus,
 };
+use hiview_core::ViewOrientation;
 use tracing::{debug, error, info, warn};
 
 use crate::cli::Source;
@@ -61,6 +62,9 @@ pub struct CameraService {
     cameras: Vec<CameraDescriptor>,
     pipeline: Option<CapturePipeline>,
     frame_bus: FrameBus,
+    /// Current mirror/rotation, reapplied every time a pipeline starts
+    /// (docs/ARCHITECTURE.md §6.4).
+    orientation: ViewOrientation,
     on_event: Arc<dyn Fn(CameraEvent) + Send + Sync>,
     _watcher: Option<DeviceWatcher>,
 }
@@ -83,6 +87,7 @@ impl CameraService {
             cameras: Vec::new(),
             pipeline: None,
             frame_bus,
+            orientation: ViewOrientation::default(),
             on_event,
             _watcher: None,
         };
@@ -143,6 +148,15 @@ impl CameraService {
         self.mode == Mode::Device && self.cameras.len() > 1
     }
 
+    /// Applies a new view orientation live on the running pipeline and
+    /// keeps it across camera re-selection and hotplug restarts.
+    pub fn set_orientation(&mut self, orientation: ViewOrientation) {
+        self.orientation = orientation;
+        if let Some(pipeline) = &self.pipeline {
+            pipeline.set_orientation(orientation.method());
+        }
+    }
+
     /// Applies a camera event arriving from the monitor or bus threads.
     pub fn on_event(&mut self, event: CameraEvent) {
         debug!("camera event: {event:?}");
@@ -200,6 +214,7 @@ impl CameraService {
         let on_event = Arc::clone(&self.on_event);
         match CapturePipeline::start(source, self.frame_bus.clone(), move |e| on_event(e)) {
             Ok(pipeline) => {
+                pipeline.set_orientation(self.orientation.method());
                 self.pipeline = Some(pipeline);
                 self.state = CameraState::Starting;
             }
