@@ -352,6 +352,7 @@ impl SimpleComponent for AppModel {
     ) -> ComponentParts<Self> {
         if init.debug_overlay
             && let Some(settings) = gtk::Settings::default()
+            && settings.has_property("gtk-debug-overlay")
         {
             settings.set_property("gtk-debug-overlay", true);
         }
