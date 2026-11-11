@@ -122,6 +122,10 @@ pub struct AppModel {
     video_page: gtk::Overlay,
     viewport: Viewport,
     menu_model: gio::Menu,
+    /// Camera-list signature the current menu model was built from.
+    menu_signature: Vec<String>,
+    /// MenuButton handle, updated imperatively only on real changes.
+    menu_button: gtk::MenuButton,
     /// Whether the FPS badge is enabled (debug builds or `--debug-overlay`).
     show_fps: bool,
     fps_label: String,
@@ -143,12 +147,11 @@ impl SimpleComponent for AppModel {
             #[wrap(Some)]
             set_content = &adw::ToolbarView {
                 add_top_bar = &adw::HeaderBar {
+                    #[name = "menu_button"]
                     pack_end = &gtk::MenuButton {
                         set_icon_name: "open-menu-symbolic",
                         set_tooltip_text: Some(strings::CAMERA_MENU_TOOLTIP),
-                        #[watch]
                         set_visible: model.camera.has_camera_menu(),
-                        #[watch]
                         set_menu_model: Some(&model.menu_model),
                     },
                 },
@@ -308,11 +311,13 @@ impl SimpleComponent for AppModel {
             video_page: gtk::Overlay::new(),
             viewport: Viewport::new(),
             menu_model: gio::Menu::new(),
+            menu_signature: Vec::new(),
+            menu_button: gtk::MenuButton::new(),
             show_fps: cfg!(debug_assertions) || init.debug_overlay,
             fps_label: String::new(),
             frame_times: VecDeque::new(),
         };
-        model.rebuild_menu();
+        model.sync_menu();
 
         let widgets = view_output!();
         model.grab_widgets(&widgets);
@@ -436,6 +441,7 @@ impl AppModel {
         self.error_page = widgets.error_page.clone();
         self.video_page = widgets.video_page.clone();
         self.viewport = widgets.viewport.clone();
+        self.menu_button = widgets.menu_button.clone();
     }
 
     /// Syncs derived UI after a camera state change.
@@ -454,7 +460,7 @@ impl AppModel {
             self.frame_times.clear();
             self.fps_label.clear();
         }
-        self.rebuild_menu();
+        self.sync_menu();
     }
 
     /// Forwards the current mirror/rotation to the capture pipeline.
@@ -498,8 +504,37 @@ impl AppModel {
         (label, camera.stable_id())
     }
 
-    /// Rebuilds the camera selection menu from the current camera list.
-    fn rebuild_menu(&mut self) {
+    /// Camera-list signature used to detect when the menu model must be
+    /// rebuilt (pure, unit-tested). Frame updates never change it.
+    fn camera_menu_signature(cameras: &[CameraDescriptor]) -> Vec<String> {
+        cameras
+            .iter()
+            .map(|c| {
+                format!(
+                    "{}{}{}{}",
+                    c.stable_id(),
+                    c.display_name(),
+                    c.dev_node.display(),
+                    c.is_microscope
+                )
+            })
+            .collect()
+    }
+
+    /// Whether the camera list changed since the menu was last built
+    /// (pure, unit-tested).
+    fn menu_needs_rebuild(previous: &[String], cameras: &[CameraDescriptor]) -> bool {
+        previous != Self::camera_menu_signature(cameras)
+    }
+
+    /// Rebuilds the menu model only when the camera list actually
+    /// changed: re-setting the model on every update (e.g. the 30 fps
+    /// frame updates) closes the open popover.
+    fn sync_menu(&mut self) {
+        if !Self::menu_needs_rebuild(&self.menu_signature, self.camera.cameras()) {
+            return;
+        }
+        self.menu_signature = Self::camera_menu_signature(self.camera.cameras());
         let cameras_menu = gio::Menu::new();
         cameras_menu.append_item(
             &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
@@ -515,7 +550,9 @@ impl AppModel {
         }
         let menu = gio::Menu::new();
         menu.append_submenu(Some(strings::CAMERA_SUBMENU_LABEL), &cameras_menu);
-        self.menu_model = menu;
+        self.menu_model = menu.clone();
+        self.menu_button.set_menu_model(Some(&menu));
+        self.menu_button.set_visible(self.camera.has_camera_menu());
     }
 
     /// Sliding-window FPS counter over the last second of rendered frames.
@@ -580,6 +617,22 @@ mod tests {
         let cams = [a.clone(), b];
         let (label, _) = AppModel::camera_menu_entry(&a, &cams);
         assert_eq!(label, "HD camera (/dev/video0)");
+    }
+
+    /// The menu model must only rebuild when the camera list changes;
+    /// re-setting it on frame updates closes the open popover.
+    #[test]
+    fn menu_needs_rebuild_only_when_camera_list_changes() {
+        let a = fake_camera("HD camera", "/dev/video0", Some("p1"));
+        let b = fake_camera("HD camera", "/dev/video2", Some("p2"));
+        let cams = [a.clone(), b.clone()];
+        let sig = AppModel::camera_menu_signature(&cams);
+        // A frame update does not touch the camera list: no rebuild.
+        assert!(!AppModel::menu_needs_rebuild(&sig, &cams));
+        // Hotplug or a name collision changes the signature: rebuild.
+        let after = [b, fake_camera("Other cam", "/dev/video4", Some("p3"))];
+        assert!(AppModel::menu_needs_rebuild(&sig, &after));
+        assert!(AppModel::menu_needs_rebuild(&sig, std::slice::from_ref(&a)));
     }
 
     #[test]
