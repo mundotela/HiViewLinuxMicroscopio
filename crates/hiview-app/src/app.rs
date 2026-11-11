@@ -7,7 +7,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hiview_capture::{CameraDescriptor, CameraEvent, CameraState};
+use hiview_capture::{
+    CameraDescriptor, CameraEvent, CameraState, RecordDenied, RecordStop, Recorder,
+    check_disk_space,
+};
 use hiview_core::{
     AppConfig, PhotoFormat, PhotoResolution, ViewOrientation, config_path, load_config, save_config,
 };
@@ -19,6 +22,7 @@ use relm4::{ComponentParts, ComponentSender, SimpleComponent, adw};
 use crate::cli::Args;
 use crate::services::camera::CameraService;
 use crate::services::photo::{PhotoOutcome, PhotoService};
+use crate::services::recorder::{ActiveRecording, StopReason, filesystem_free_bytes};
 use crate::strings;
 use crate::widgets::viewport::Viewport;
 use std::path::PathBuf;
@@ -62,6 +66,21 @@ pub const GLOBAL_CSS: &str = ".fps-indicator {
 .shutter-button {
     padding: 12px;
     margin: 0 8px;
+}
+.shutter-button.recording {
+    background-color: #e01b24;
+    color: #ffffff;
+}
+.record-indicator {
+    background-color: rgba(0, 0, 0, 0.65);
+    color: #ffffff;
+    padding: 4px 10px;
+    margin: 12px;
+    border-radius: 8px;
+    font-weight: bold;
+}
+.record-indicator image {
+    color: #e01b24;
 }";
 
 /// Menu target value meaning "pick automatically".
@@ -87,7 +106,17 @@ relm4::new_stateless_action!(FreezeAction, WindowActionGroup, "freeze");
 relm4::new_stateless_action!(FullscreenAction, WindowActionGroup, "fullscreen");
 relm4::new_stateless_action!(EscapeAction, WindowActionGroup, "escape");
 relm4::new_stateless_action!(TakePhotoAction, WindowActionGroup, "take-photo");
+relm4::new_stateless_action!(RecordAction, WindowActionGroup, "record");
 relm4::new_stateless_action!(PreferencesAction, WindowActionGroup, "preferences");
+
+/// Which capture the floating shutter button performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutterMode {
+    /// The shutter button takes a photo.
+    Photo,
+    /// The shutter button starts/stops a recording (`R` always does).
+    Video,
+}
 
 /// Inputs handled by the root component.
 #[derive(Debug)]
@@ -120,8 +149,24 @@ pub enum Input {
     ToggleFullscreen,
     /// Leave fullscreen (`Esc`).
     Escape,
-    /// Take a photo (`Espaço` or the shutter button).
+    /// Take a photo (`Espaço`).
     TakePhoto,
+    /// The floating shutter button was pressed; dispatches by mode.
+    Shutter,
+    /// Either mode toggle fired; the active one decides the mode.
+    ShutterModeToggled,
+    /// Start/stop a recording (`R` or the video-mode shutter).
+    ToggleRecord,
+    /// `Recorder::start` finished on the worker thread.
+    RecordStarted(Result<Recorder, String>),
+    /// One-second tick while recording (elapsed + dropped counters).
+    RecordTick,
+    /// The record pipeline reported a fatal error mid-recording.
+    RecordFailed(String),
+    /// `Recorder::stop` finished; carries the finalize outcome.
+    RecordStopped(RecordStop),
+    /// The window close button was pressed.
+    CloseRequested,
     /// A photo save job finished on the worker thread.
     PhotoDone(PhotoOutcome),
     /// Open the preferences dialog (`Ctrl+,`).
@@ -172,6 +217,26 @@ pub struct AppModel {
     shutter_flash: gtk::Box,
     /// Folder row of the open preferences dialog, to refresh its subtitle.
     pref_folder_row: Option<adw::ActionRow>,
+    /// Video-mode toggle handle: its `active` state selects the mode.
+    mode_video_btn: gtk::ToggleButton,
+    /// Which capture the shutter button performs (Foto/Video toggle).
+    shutter_mode: ShutterMode,
+    /// Recording in flight, if any.
+    recording: Option<ActiveRecording>,
+    /// A recorder start/stop is running on a worker thread (section 7).
+    record_transition: bool,
+    /// Why the in-flight finalize was triggered (drives the toast).
+    stop_reason: Option<StopReason>,
+    /// The window close was requested while recording/finalizing.
+    quit_pending: bool,
+    /// Whether an H.264 encoder exists on this system.
+    rec_supported: bool,
+    /// `--debug-overlay`: also shows the dropped-frame counter.
+    debug_overlay: bool,
+    /// Elapsed recording time shown in the red indicator.
+    record_elapsed: String,
+    /// Dropped-frame counter (debug overlay only).
+    drops_label: String,
 }
 
 #[relm4::component(pub)]
@@ -262,6 +327,30 @@ impl SimpleComponent for AppModel {
 
                         add_overlay = &gtk::Box {
                             set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 6,
+                            set_halign: gtk::Align::Start,
+                            set_valign: gtk::Align::Start,
+                            set_css_classes: &["record-indicator"],
+                            #[watch]
+                            set_visible: model.recording.is_some(),
+
+                            gtk::Image {
+                                set_icon_name: Some("media-record-symbolic"),
+                            },
+                            gtk::Label {
+                                #[watch]
+                                set_label: &model.record_elapsed,
+                            },
+                            gtk::Label {
+                                #[watch]
+                                set_visible: model.debug_overlay,
+                                #[watch]
+                                set_label: &model.drops_label,
+                            },
+                        },
+
+                        add_overlay = &gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
                             set_spacing: 4,
                             set_halign: gtk::Align::Center,
                             set_valign: gtk::Align::End,
@@ -301,12 +390,41 @@ impl SimpleComponent for AppModel {
                             gtk::Separator {
                                 set_orientation: gtk::Orientation::Vertical,
                             },
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_css_classes: &["linked"],
+                                #[name = "mode_photo_btn"]
+                                gtk::ToggleButton {
+                                    set_icon_name: "camera-photo-symbolic",
+                                    set_tooltip_text: Some(strings::MODE_PHOTO_TOOLTIP),
+                                    set_focusable: false,
+                                    set_active: true,
+                                    connect_toggled => Input::ShutterModeToggled,
+                                },
+                                #[name = "mode_video_btn"]
+                                gtk::ToggleButton {
+                                    set_icon_name: "camera-video-symbolic",
+                                    set_focusable: false,
+                                    set_group: Some(&mode_photo_btn),
+                                    #[watch]
+                                    set_sensitive: model.rec_supported,
+                                    #[watch]
+                                    set_tooltip_text: Some(model.video_mode_tooltip()),
+                                    connect_toggled => Input::ShutterModeToggled,
+                                },
+                            },
+                            gtk::Separator {
+                                set_orientation: gtk::Orientation::Vertical,
+                            },
                             gtk::Button {
-                                set_icon_name: "camera-photo-symbolic",
-                                set_tooltip_text: Some(strings::SHUTTER_TOOLTIP),
-                                set_css_classes: &["circular", "shutter-button"],
+                                #[watch]
+                                set_icon_name: model.shutter_icon(),
+                                #[watch]
+                                set_tooltip_text: Some(model.shutter_tooltip()),
+                                #[watch]
+                                set_css_classes: model.shutter_css(),
                                 set_focusable: false,
-                                connect_clicked => Input::TakePhoto,
+                                connect_clicked => Input::Shutter,
                             },
                             gtk::Separator {
                                 set_orientation: gtk::Orientation::Vertical,
@@ -317,6 +435,8 @@ impl SimpleComponent for AppModel {
                                 set_has_frame: false,
                                 set_focusable: false,
                                 connect_clicked => Input::RotateCcw,
+                                #[watch]
+                                set_sensitive: model.recording.is_none(),
                             },
                             gtk::Button {
                                 set_icon_name: "object-rotate-right-symbolic",
@@ -324,6 +444,8 @@ impl SimpleComponent for AppModel {
                                 set_has_frame: false,
                                 set_focusable: false,
                                 connect_clicked => Input::RotateCw,
+                                #[watch]
+                                set_sensitive: model.recording.is_none(),
                             },
                             gtk::Separator {
                                 set_orientation: gtk::Orientation::Vertical,
@@ -334,6 +456,8 @@ impl SimpleComponent for AppModel {
                                 set_has_frame: false,
                                 set_focusable: false,
                                 connect_clicked => Input::ToggleFreeze,
+                                #[watch]
+                                set_sensitive: model.recording.is_none(),
                                 #[watch]
                                 set_active: model.frozen,
                             },
@@ -403,6 +527,16 @@ impl SimpleComponent for AppModel {
             toast_overlay: adw::ToastOverlay::new(),
             shutter_flash: gtk::Box::new(gtk::Orientation::Vertical, 0),
             pref_folder_row: None,
+            mode_video_btn: gtk::ToggleButton::new(),
+            shutter_mode: ShutterMode::Photo,
+            recording: None,
+            record_transition: false,
+            stop_reason: None,
+            quit_pending: false,
+            rec_supported: hiview_capture::available_encoder().is_some(),
+            debug_overlay: init.debug_overlay,
+            record_elapsed: String::new(),
+            drops_label: strings::drops_label(0),
         };
         model.sync_menu();
 
@@ -447,7 +581,18 @@ impl SimpleComponent for AppModel {
         view_action!(FullscreenAction, Input::ToggleFullscreen);
         view_action!(EscapeAction, Input::Escape);
         view_action!(TakePhotoAction, Input::TakePhoto);
+        view_action!(RecordAction, Input::ToggleRecord);
         view_action!(PreferencesAction, Input::OpenPreferences);
+
+        // The window must finalize a running recording (EOS sequence)
+        // before it may close — see Input::CloseRequested.
+        root.connect_close_request({
+            let sender = sender.clone();
+            move |_| {
+                sender.input(Input::CloseRequested);
+                glib::Propagation::Stop
+            }
+        });
         group.register_for_widget(root);
 
         // Shortcuts for the M2 actions (docs/CONVENTIONS.md §13).
@@ -464,6 +609,7 @@ impl SimpleComponent for AppModel {
         app.set_accelerators_for_action::<FullscreenAction>(&["F11"]);
         app.set_accelerators_for_action::<EscapeAction>(&["Escape"]);
         app.set_accelerators_for_action::<TakePhotoAction>(&["space"]);
+        app.set_accelerators_for_action::<RecordAction>(&["r", "R"]);
         app.set_accelerators_for_action::<PreferencesAction>(&["<Ctrl>comma"]);
 
         ComponentParts { model, widgets }
@@ -474,6 +620,11 @@ impl SimpleComponent for AppModel {
             Input::Camera(event) => {
                 self.camera.on_event(event);
                 self.on_state_change();
+                if matches!(self.state, CameraState::Disconnected | CameraState::Error)
+                    && let Some(active) = self.recording.take()
+                {
+                    self.begin_finalize(active, StopReason::Disconnected, &sender);
+                }
             }
             Input::SelectCamera(target) => {
                 self.camera.select(&target);
@@ -499,16 +650,21 @@ impl SimpleComponent for AppModel {
                 self.orientation.toggle_mirror_v();
                 self.apply_orientation();
             }
-            Input::RotateCcw => {
+            // Rotation is blocked while recording: a video cannot change
+            // resolution mid-file (docs/ARCHITECTURE.md section 6.4).
+            Input::RotateCcw if self.recording.is_none() => {
                 self.orientation.rotate_ccw();
                 self.apply_orientation();
             }
-            Input::RotateCw => {
+            Input::RotateCw if self.recording.is_none() => {
                 self.orientation.rotate_cw();
                 self.apply_orientation();
             }
+            Input::RotateCcw | Input::RotateCw => {
+                tracing::debug!("rotate ignored while recording");
+            }
             Input::ToggleFreeze => {
-                if self.state == CameraState::Streaming {
+                if self.state == CameraState::Streaming && self.recording.is_none() {
                     self.set_frozen(!self.frozen);
                 }
             }
@@ -524,20 +680,45 @@ impl SimpleComponent for AppModel {
                     self.window.unfullscreen();
                 }
             }
-            Input::TakePhoto => {
-                if self.state == CameraState::Streaming
-                    && let Some(frame) = self.viewport.photo_frame()
-                {
-                    if self
-                        .photos
-                        .take(&frame, &self.config.photo, self.photo_dir())
-                        .is_ok()
-                    {
-                        self.flash_shutter();
-                    } else {
-                        self.toast_overlay
-                            .add_toast(adw::Toast::new(strings::PHOTO_BUSY));
-                    }
+            Input::TakePhoto => self.take_photo(),
+            Input::Shutter => match self.shutter_mode {
+                ShutterMode::Photo => self.take_photo(),
+                ShutterMode::Video => self.toggle_record(&sender),
+            },
+            Input::ShutterModeToggled => {
+                self.shutter_mode = if self.mode_video_btn.is_active() {
+                    ShutterMode::Video
+                } else {
+                    ShutterMode::Photo
+                };
+            }
+            Input::ToggleRecord => self.toggle_record(&sender),
+            Input::RecordStarted(result) => self.on_record_started(result, &sender),
+            Input::RecordTick => {
+                if let Some(active) = &self.recording {
+                    self.record_elapsed =
+                        strings::elapsed_label(active.started.elapsed().as_secs());
+                    self.drops_label = strings::drops_label(
+                        active.recorder.dropped_frames() + active.recorder.rejected_frames(),
+                    );
+                    Self::schedule_record_tick(&sender);
+                }
+            }
+            Input::RecordFailed(detail) => {
+                tracing::error!("record pipeline reported an error: {detail}");
+                if let Some(active) = self.recording.take() {
+                    self.begin_finalize(active, StopReason::Failed, &sender);
+                }
+            }
+            Input::RecordStopped(stop) => self.on_record_stopped(stop),
+            Input::CloseRequested => {
+                if let Some(active) = self.recording.take() {
+                    self.quit_pending = true;
+                    self.begin_finalize(active, StopReason::Close, &sender);
+                } else if self.record_transition {
+                    self.quit_pending = true;
+                } else {
+                    self.window.destroy();
                 }
             }
             Input::PhotoDone(outcome) => self.on_photo_done(outcome),
@@ -578,6 +759,7 @@ impl AppModel {
         self.video_page = widgets.video_page.clone();
         self.viewport = widgets.viewport.clone();
         self.menu_button = widgets.menu_button.clone();
+        self.mode_video_btn = widgets.mode_video_btn.clone();
     }
 
     /// Syncs derived UI after a camera state change.
@@ -730,6 +912,235 @@ impl AppModel {
         glib::timeout_add_local_once(Duration::from_millis(80), move || {
             flash.remove_css_class("on");
         });
+    }
+
+    /// Takes a photo from the frozen/latest frame (section 6.6). Works
+    /// while recording — photos are still allowed (M4).
+    fn take_photo(&self) {
+        if self.state == CameraState::Streaming
+            && let Some(frame) = self.viewport.photo_frame()
+        {
+            if self
+                .photos
+                .take(&frame, &self.config.photo, self.photo_dir())
+                .is_ok()
+            {
+                self.flash_shutter();
+            } else {
+                self.toast_overlay
+                    .add_toast(adw::Toast::new(strings::PHOTO_BUSY));
+            }
+        }
+    }
+
+    /// `R` or the video-mode shutter: start or stop a recording (section
+    /// 6.7). Both transitions run on a worker thread — starting builds a
+    /// pipeline and touches the filesystem, stopping waits for EOS.
+    fn toggle_record(&mut self, sender: &ComponentSender<Self>) {
+        if self.record_transition {
+            return;
+        }
+        if let Some(active) = self.recording.take() {
+            self.begin_finalize(active, StopReason::User, sender);
+            return;
+        }
+        if self.state != CameraState::Streaming {
+            return;
+        }
+        if !self.rec_supported {
+            self.toast_overlay
+                .add_toast(adw::Toast::new(strings::REC_UNSUPPORTED));
+            return;
+        }
+        // Probe the XDG Videos root: the same filesystem as HiView/, and
+        // it exists even before the folder does.
+        let videos_root = glib::user_special_dir(glib::UserDirectory::Videos)
+            .unwrap_or_else(|| PathBuf::from("."));
+        match check_disk_space(&videos_root, filesystem_free_bytes) {
+            Ok(()) => {}
+            Err(RecordDenied::LowDiskSpace { free_mb }) => {
+                tracing::warn!("recording refused: {free_mb} MB free");
+                self.toast_overlay
+                    .add_toast(adw::Toast::new(strings::REC_LOW_DISK));
+                return;
+            }
+            Err(RecordDenied::FreeSpaceUnknown) => {
+                tracing::warn!("recording refused: free space unknown");
+                self.toast_overlay
+                    .add_toast(adw::Toast::new(strings::REC_LOW_DISK));
+                return;
+            }
+        }
+        let Some(frame) = self.viewport.photo_frame() else {
+            return;
+        };
+        let dir = videos_root.join("HiView");
+        let subscription = self.camera.frame_bus().subscribe();
+        self.record_transition = true;
+        let worker = sender.clone();
+        let reporter = sender.clone();
+        std::thread::spawn(move || {
+            let result = Recorder::start(
+                subscription,
+                frame.width,
+                frame.height,
+                30,
+                1,
+                &dir,
+                move |detail| reporter.input(Input::RecordFailed(detail)),
+            )
+            .map_err(|e| e.to_string());
+            worker.input(Input::RecordStarted(result));
+        });
+    }
+
+    /// Kicks the 1 Hz elapsed/dropped tick that reschedules itself while
+    /// a recording is active.
+    fn schedule_record_tick(sender: &ComponentSender<Self>) {
+        let sender = sender.clone();
+        glib::timeout_add_seconds_local_once(1, move || sender.input(Input::RecordTick));
+    }
+
+    /// Finalizes a recording off the UI thread (section 7): `stop()` can
+    /// wait up to 5 s for EOS on the bus.
+    fn begin_finalize(
+        &mut self,
+        active: ActiveRecording,
+        reason: StopReason,
+        sender: &ComponentSender<Self>,
+    ) {
+        self.record_transition = true;
+        self.stop_reason = Some(reason);
+        self.record_elapsed.clear();
+        self.drops_label.clear();
+        let worker = sender.clone();
+        std::thread::spawn(move || {
+            let stop = active.recorder.stop();
+            worker.input(Input::RecordStopped(stop));
+        });
+    }
+
+    /// A `Recorder::start` came back from the worker thread.
+    fn on_record_started(
+        &mut self,
+        result: Result<Recorder, String>,
+        sender: &ComponentSender<Self>,
+    ) {
+        self.record_transition = false;
+        match result {
+            Ok(recorder) if self.quit_pending => {
+                // The window close raced the worker start: finalize at
+                // once instead of leaking a live recorder.
+                self.begin_finalize(
+                    ActiveRecording {
+                        recorder,
+                        started: Instant::now(),
+                    },
+                    StopReason::Close,
+                    sender,
+                );
+                return;
+            }
+            Ok(recorder) => {
+                tracing::info!("recording started");
+                self.recording = Some(ActiveRecording {
+                    recorder,
+                    started: Instant::now(),
+                });
+                self.record_elapsed = strings::elapsed_label(0);
+                Self::schedule_record_tick(sender);
+            }
+            Err(err) => {
+                tracing::error!("recording failed to start: {err}");
+                self.toast_overlay
+                    .add_toast(adw::Toast::new(strings::VIDEO_SAVE_FAILED));
+            }
+        }
+        if self.quit_pending {
+            self.window.destroy();
+        }
+    }
+
+    /// A `Recorder::stop` came back: report the outcome and quit if the
+    /// finalize was triggered by the window closing.
+    fn on_record_stopped(&mut self, stop: RecordStop) {
+        self.record_transition = false;
+        let reason = self.stop_reason.take();
+        match stop.error {
+            Some(err) => {
+                tracing::error!("recording finalize failed: {err}");
+                // Without the EOS sequence the MP4 lacks `moov` — corrupt.
+                if let Err(e) = std::fs::remove_file(&stop.path) {
+                    tracing::warn!("could not remove broken video: {e}");
+                }
+                self.toast_overlay
+                    .add_toast(adw::Toast::new(strings::VIDEO_SAVE_FAILED));
+            }
+            None if reason == Some(StopReason::Disconnected) => {
+                tracing::info!(
+                    "recording finalized after disconnect: {}",
+                    stop.path.display()
+                );
+                self.toast_overlay
+                    .add_toast(adw::Toast::new(strings::REC_ENDED_DISCONNECTED));
+            }
+            None => {
+                tracing::info!("video saved: {}", stop.path.display());
+                let toast = adw::Toast::new(strings::VIDEO_SAVED);
+                toast.set_button_label(Some(strings::OPEN_BUTTON));
+                toast.set_timeout(6);
+                let window = self.window.clone();
+                toast.connect_button_clicked(move |_| {
+                    let file = gio::File::for_path(&stop.path);
+                    gtk::FileLauncher::new(Some(&file)).launch(
+                        Some(&window),
+                        gio::Cancellable::NONE,
+                        |_| {},
+                    );
+                });
+                self.toast_overlay.add_toast(toast);
+            }
+        }
+        if self.quit_pending {
+            self.window.destroy();
+        }
+    }
+
+    /// Tooltip for the video-mode toggle: explains when recording is
+    /// unsupported on this system (no H.264 encoder).
+    fn video_mode_tooltip(&self) -> &'static str {
+        if self.rec_supported {
+            strings::MODE_VIDEO_TOOLTIP
+        } else {
+            strings::MODE_VIDEO_UNAVAILABLE_TOOLTIP
+        }
+    }
+
+    /// Icon shown on the shutter button for the current mode/state.
+    fn shutter_icon(&self) -> &'static str {
+        match (self.shutter_mode, self.recording.is_some()) {
+            (_, true) => "media-playback-stop-symbolic",
+            (ShutterMode::Video, false) => "media-record-symbolic",
+            (ShutterMode::Photo, false) => "camera-photo-symbolic",
+        }
+    }
+
+    /// Tooltip for the shutter button for the current mode/state.
+    fn shutter_tooltip(&self) -> &'static str {
+        match (self.shutter_mode, self.recording.is_some()) {
+            (_, true) => strings::RECORD_STOP_TOOLTIP,
+            (ShutterMode::Video, false) => strings::RECORD_START_TOOLTIP,
+            (ShutterMode::Photo, false) => strings::SHUTTER_TOOLTIP,
+        }
+    }
+
+    /// CSS classes for the shutter button (`.recording` paints it red).
+    fn shutter_css(&self) -> &'static [&'static str] {
+        if self.recording.is_some() {
+            &["circular", "shutter-button", "recording"]
+        } else {
+            &["circular", "shutter-button"]
+        }
     }
 
     /// Reports the outcome of a background photo save (section 6.6).

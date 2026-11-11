@@ -5,3 +5,4 @@
 
 pub mod camera;
 pub mod photo;
+pub mod recorder;
