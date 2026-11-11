@@ -1085,7 +1085,12 @@ impl AppModel {
                     .add_toast(adw::Toast::new(strings::REC_ENDED_DISCONNECTED));
             }
             None => {
-                tracing::info!("video saved: {}", stop.path.display());
+                tracing::info!(
+                    "video saved: {} ({} dropped, {} rejected)",
+                    stop.path.display(),
+                    stop.dropped_frames,
+                    stop.rejected_frames
+                );
                 let toast = adw::Toast::new(strings::VIDEO_SAVED);
                 toast.set_button_label(Some(strings::OPEN_BUTTON));
                 toast.set_timeout(6);

@@ -112,6 +112,10 @@ pub struct RecordStop {
     /// EOS timeout); the MP4 may be missing its `moov` atom and callers
     /// should delete it.
     pub error: Option<String>,
+    /// Frames dropped because the bounded subscription queue was full.
+    pub dropped_frames: u64,
+    /// Frames rejected for mismatched geometry while recording.
+    pub rejected_frames: u64,
 }
 
 /// Terminal event observed on the record pipeline bus.
@@ -257,6 +261,8 @@ impl Recorder {
         RecordStop {
             path: self.path.clone(),
             error,
+            dropped_frames: self.dropped.load(Ordering::Relaxed),
+            rejected_frames: self.rejected.load(Ordering::Relaxed),
         }
     }
 
