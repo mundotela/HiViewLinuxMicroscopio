@@ -389,12 +389,14 @@ fn build_record_pipeline(
     )?;
     let parse = make("h264parse")?;
     let mux = make("mp4mux")?;
-    // Fragmented MP4 (engineering decision, §6.7): one self-contained
-    // fragment per second, moov first. A crash, SIGKILL or power loss
-    // still leaves a seekable file, losing at most the last second. The
-    // EOS finalize remains mandatory for a complete `moov`.
-    mux.set_property("fragment-duration", 1000_u32);
-    mux.set_property_from_str("fragment-mode", "first-moov-then-finalise");
+    // Crash resilience (engineering decision, §6.7): reserve index space
+    // for up to 2 h and rewrite the on-disk `moov` every second. A crash,
+    // SIGKILL or power loss leaves a seekable file whose header already
+    // covers (nearly) everything written — the fragmented-MP4 modes were
+    // measured to report only the first fragment's duration on a kill.
+    // The EOS finalize remains mandatory for a complete `moov`.
+    mux.set_property("reserved-max-duration", 7_200_000_000_000_u64);
+    mux.set_property("reserved-moov-update-period", 1_000_000_000_u64);
     let sink = make("filesink")?;
     sink.set_property("location", path.to_string_lossy().as_ref());
 

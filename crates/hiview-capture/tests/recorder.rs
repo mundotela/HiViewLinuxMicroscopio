@@ -185,7 +185,7 @@ fn source_death_mid_recording_keeps_playable_file() {
 /// `end_of_stream`. Thanks to `mp4mux fragment-duration=1000` the file
 /// must still be discoverable and decodable up to the last fragment.
 #[test]
-fn abrupt_teardown_keeps_fragmented_file_playable() {
+fn abrupt_teardown_keeps_killed_file_playable() {
     LazyLock::force(&GST_INIT);
     let dir = temp_dir();
     let bus = FrameBus::default();
@@ -219,12 +219,17 @@ fn abrupt_teardown_keeps_fragmented_file_playable() {
             Err(_) => std::thread::sleep(Duration::from_millis(100)),
         }
     }
-    let (_duration, profile, width, height) =
+    let (duration, profile, width, height) =
         probe.unwrap_or_else(|| panic!("file never became discoverable"));
     assert_eq!(profile, "constrained-baseline");
     assert_eq!((width, height), (640, 480));
-    // At least one 1 s fragment must have been written and decodable;
-    // the trailing partial fragment may be lost by design.
+    // The reserved-moov index is rewritten every second, so a killed
+    // file must report close to the real duration (>= fed - 1 s), not
+    // just be discoverable.
+    assert!(
+        duration >= 1.5,
+        "killed file reports only {duration:.2}s of a 2.5 s feed"
+    );
     let decoded = decode_frame_count(&path);
     assert!(
         decoded >= 15,
