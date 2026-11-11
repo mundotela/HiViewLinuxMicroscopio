@@ -23,3 +23,4 @@ chrono.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 gst-pbutils.workspace = true
+image.workspace = true

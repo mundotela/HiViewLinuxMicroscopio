@@ -10,6 +10,7 @@ mod events;
 mod frame;
 mod pipeline;
 mod recorder;
+mod thumbs;
 
 pub use device::{CameraDescriptor, CaptureMode, DeviceWatcher, enumerate};
 pub use error::Error;
@@ -20,6 +21,7 @@ pub use recorder::{
     MIN_FREE_BYTES, RecordDenied, RecordStop, Recorder, VideoEncoder, available_encoder,
     check_disk_space,
 };
+pub use thumbs::{VideoProbe, probe_video};
 
 /// Initializes GStreamer. Idempotent and safe to call from any thread.
 ///

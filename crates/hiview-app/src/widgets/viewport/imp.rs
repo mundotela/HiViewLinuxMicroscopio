@@ -48,7 +48,9 @@ impl WidgetImpl for Viewport {
         let Some(texture) = self.texture.borrow().clone() else {
             return;
         };
-        let t = self.transform.borrow();
+        // Copy the transform out — a borrow must never live across a
+        // GTK call (re-entrant callbacks + RefCell panic = abort).
+        let t = *self.transform.borrow();
         let bounds = graphene::Rect::new(
             t.offset.x as f32,
             t.offset.y as f32,
@@ -155,9 +157,11 @@ impl Viewport {
     }
 
     fn zoom_at(&self, anchor: Point, factor: f64) {
-        let mut t = self.transform.borrow_mut();
-        t.zoom_at(anchor, factor, self.frame_size.get(), self.widget_size());
-        drop(t);
+        let frame = self.frame_size.get();
+        let widget = self.widget_size();
+        let mut t = *self.transform.borrow();
+        t.zoom_at(anchor, factor, frame, widget);
+        *self.transform.borrow_mut() = t;
         self.obj().queue_draw();
     }
 
@@ -167,13 +171,14 @@ impl Viewport {
     }
 
     fn toggle_fit_100(&self) {
-        let mut t = self.transform.borrow_mut();
-        *t = if t.mode == ViewMode::Fit {
-            ViewTransform::zoom_100(self.frame_size.get(), self.widget_size())
+        let frame = self.frame_size.get();
+        let widget = self.widget_size();
+        let mode = self.transform.borrow().mode;
+        *self.transform.borrow_mut() = if mode == ViewMode::Fit {
+            ViewTransform::zoom_100(frame, widget)
         } else {
-            ViewTransform::fit(self.frame_size.get(), self.widget_size())
+            ViewTransform::fit(frame, widget)
         };
-        drop(t);
         self.obj().queue_draw();
     }
 }

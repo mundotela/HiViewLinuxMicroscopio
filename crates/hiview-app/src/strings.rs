@@ -150,6 +150,59 @@ pub const REC_LOW_DISK: &str = "Espaço em disco insuficiente para gravar (míni
 /// Toast shown when no H.264 encoder is installed at all.
 pub const REC_UNSUPPORTED: &str = "Gravação indisponível: codificador H.264 não encontrado";
 
+/// Header button that opens the gallery (`Ctrl+G`).
+pub const GALLERY_BUTTON_LABEL: &str = "Galeria";
+
+/// Tooltip of the gallery header button.
+pub const GALLERY_BUTTON_TOOLTIP: &str = "Abrir a galeria (Ctrl+G)";
+
+/// Title of the gallery page.
+pub const GALLERY_TITLE: &str = "Galeria";
+
+/// Symbolic icon of the empty-gallery status page.
+pub const GALLERY_EMPTY_ICON: &str = "folder-pictures-symbolic";
+
+/// Status page title when the gallery has nothing to show.
+pub const GALLERY_EMPTY_TITLE: &str = "Galeria vazia";
+
+/// Status page description when the gallery has nothing to show.
+pub const GALLERY_EMPTY_DESCRIPTION: &str = "Fotos e vídeos feitos com o HiView aparecem aqui.";
+
+/// Context action: open the file with the system app.
+pub const GALLERY_OPEN: &str = "Abrir";
+
+/// Context action: reveal the file in its folder.
+pub const GALLERY_SHOW_IN_FOLDER: &str = "Mostrar na pasta";
+
+/// Context action: move the file to the trash.
+pub const GALLERY_TRASH: &str = "Mover para a lixeira";
+
+/// Heading of the trash confirmation dialog.
+pub const TRASH_CONFIRM_TITLE: &str = "Mover para a lixeira?";
+
+/// Destructive response of the trash confirmation dialog.
+pub const TRASH_CONFIRM_BUTTON: &str = "Mover para a lixeira";
+
+/// Generic cancel response.
+pub const CANCEL_BUTTON: &str = "Cancelar";
+
+/// Toast shown after a file was moved to the trash.
+pub const TRASHED: &str = "Movido para a lixeira";
+
+/// Toast shown when trashing failed.
+pub const TRASH_FAILED: &str = "Não foi possível mover para a lixeira";
+
+/// Toast shown when the system app could not open the file.
+pub const OPEN_FAILED: &str = "Não foi possível abrir o arquivo";
+
+/// Label of the in-progress recording tile.
+pub const RECORDING_TILE: &str = "Gravando…";
+
+/// Body of the trash confirmation dialog.
+pub fn trash_confirm_body(name: &str) -> String {
+    format!("\"{name}\" será movido para a lixeira. Você pode recuperá-lo depois.")
+}
+
 /// Dropped-frame counter shown with `--debug-overlay` while recording.
 pub fn drops_label(dropped: u64) -> String {
     format!("{dropped} quadros perdidos")

@@ -153,11 +153,30 @@ O que entra na foto:
 
 ## 9. Galeria
 
-Abra com o botão **Galeria** ou `Ctrl+G`. Lá você pode:
+Abra com o botão **Galeria** no topo da janela ou `Ctrl+G`. Volte ao
+vídeo ao vivo pela seta **←** do cabeçalho — o microscópio continua
+capturando enquanto a galeria está aberta, então a volta é imediata.
 
-- abrir uma foto ou vídeo no visualizador do sistema;
-- mostrar o arquivo na pasta;
-- excluir (o arquivo vai para a **lixeira** e pode ser recuperado).
+A galeria mostra as fotos da pasta configurada em Preferências (padrão
+`Imagens/HiView`) e os vídeos de `Vídeos/HiView`, dos mais novos aos
+mais antigos. Cada item mostra miniatura e data/hora; vídeos mostram
+também um selo de ▶ e a duração. Fotos e vídeos feitos com o app
+aparecem na galeria automaticamente, sem precisar reabri-la.
+
+- **Clicar** em um item abre no aplicativo do sistema.
+- **Setas do teclado** navegam entre os itens e **Enter** abre o item
+  selecionado.
+- **Botão direito** em um item abre o menu: **Abrir**,
+  **Mostrar na pasta** e **Mover para a lixeira** (pede confirmação;
+  o arquivo pode ser recuperado da lixeira do sistema).
+
+Enquanto uma gravação está em andamento, o indicador vermelho aparece
+também no cabeçalho da galeria e o vídeo em gravação aparece como um
+item "Gravando…" no topo — ele não pode ser aberto nem excluído até a
+gravação terminar.
+
+Um arquivo que não puder ser lido aparece com um ícone de alerta, sem
+atrapalhar os demais itens.
 
 ---
 
