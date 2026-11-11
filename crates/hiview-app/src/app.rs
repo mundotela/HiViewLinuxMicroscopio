@@ -264,12 +264,25 @@ impl AppModel {
             let label = if camera.is_microscope {
                 strings::MICROSCOPE_LABEL.to_string()
             } else {
-                format!("{} ({})", camera.name, camera.dev_node.display())
+                // Friendly product name; the node is appended only to tell
+                // apart cameras with identical names.
+                let duplicate = self
+                    .camera
+                    .cameras()
+                    .iter()
+                    .filter(|c| c.display_name() == camera.display_name())
+                    .count()
+                    > 1;
+                if duplicate {
+                    format!("{} ({})", camera.display_name(), camera.dev_node.display())
+                } else {
+                    camera.display_name().to_string()
+                }
             };
             cameras_menu.append_item(
                 &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
                     &label,
-                    &camera.dev_node.to_string_lossy().to_string(),
+                    &camera.stable_id(),
                 ),
             );
         }
