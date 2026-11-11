@@ -52,6 +52,8 @@ pub enum Input {
     ThumbDone(ThumbOutcome),
     /// A tile was activated — open it in the system app.
     Activate(u32),
+    /// Left-click on a tile (grid-level gesture) — open by path.
+    Open(PathBuf),
     /// Right-click on a tile: position the shared context menu.
     ContextMenu {
         /// File the actions resolve by path at click time.
@@ -180,7 +182,10 @@ impl SimpleComponent for GalleryModel {
                         #[name = "grid_view"]
                         #[wrap(Some)]
                         set_child = &gtk::GridView {
-                            set_single_click_activate: true,
+                            // Clicks are handled by the grid-level
+                            // GestureClick below: the row widgets are
+                            // untargetable by design, so GTK's own
+                            // single-click-activate never fires.
                             set_margin_start: 12,
                             set_margin_end: 12,
                             set_margin_top: 12,
@@ -265,7 +270,7 @@ impl SimpleComponent for GalleryModel {
                     return;
                 };
                 let tile = build_tile();
-                let root_ptr = tile.root.clone().upcast::<glib::Object>().as_ptr() as usize;
+                let root_ptr = tile_key(&tile.root);
                 item.set_child(Some(&tile.root));
                 entry.set_tile(Rc::new(tile));
                 tile_entries.borrow_mut().insert(root_ptr, entry);
@@ -279,8 +284,7 @@ impl SimpleComponent for GalleryModel {
                     .downcast_ref::<gtk::ListItem>()
                     .and_then(|item| item.child())
                 {
-                    let key = child.upcast::<glib::Object>().as_ptr() as usize;
-                    tile_entries.borrow_mut().remove(&key);
+                    tile_entries.borrow_mut().remove(&tile_key(&child));
                 }
                 let entry = item
                     .downcast_ref::<gtk::ListItem>()
@@ -298,6 +302,31 @@ impl SimpleComponent for GalleryModel {
             move |_, position| sender.input(Input::Activate(position))
         });
         strip_item_targets(&grid_view);
+
+        // Primary click opens the file — the row widgets are
+        // untargetable by design, so GTK's per-row click gesture (and
+        // its single-click-activate) never sees a press; activation is
+        // re-implemented here at grid level with the same contract.
+        let open = gtk::GestureClick::new();
+        open.set_button(gdk::BUTTON_PRIMARY);
+        open.connect_released({
+            let grid_view = grid_view.clone();
+            let tile_entries = tile_entries.clone();
+            let sender = sender.clone();
+            move |gesture, n_press, x, y| {
+                let Some(entry) = entry_at_point(&grid_view, x, y, &tile_entries) else {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                };
+                if n_press != 1 || !entry.can_open() {
+                    gesture.set_state(gtk::EventSequenceState::Denied);
+                    return;
+                }
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                sender.input(Input::Open(entry.path()));
+            }
+        });
+        grid_view.add_controller(open);
 
         // One right-click gesture on the permanent grid — never on a
         // tile. Tiles and ListItemWidgets are untargetable (they are
@@ -421,6 +450,11 @@ impl SimpleComponent for GalleryModel {
             Input::ThumbDone(outcome) => self.on_thumb_done(outcome),
             Input::Activate(position) => {
                 if let Some(entry) = self.entry_at(position) {
+                    self.open_entry(&entry, &sender);
+                }
+            }
+            Input::Open(path) => {
+                if let Some(entry) = self.by_path.get(&path).cloned() {
                     self.open_entry(&entry, &sender);
                 }
             }
@@ -767,19 +801,47 @@ impl Drop for GalleryModel {
     }
 }
 
-/// `set_can_target(false)` on every `ListItemWidget` the grid owns.
+/// `set_can_target(false)` on every row widget the grid owns.
 /// Recycled list-item widgets are unparented on the fly — if one is
 /// the pointer's target when that happens, GTK synthesizes crossing
 /// events over a dead widget chain and logs `Gtk-CRITICAL
 /// gtk_widget_compute_point`. Keeping the pointer on the permanent
 /// grid avoids the whole class of failure.
+///
+/// Only `GtkList*` internals are stripped (GTK 4.14's
+/// `GtkListItemWidget`/`GtkListHeaderWidget` are private types with no
+/// binding — filtered by GType name). Other grid children, notably
+/// the shared context-menu popover, must keep `can_target` or their
+/// own buttons stop receiving clicks.
 fn strip_item_targets(grid: &gtk::GridView) {
     let mut child = grid.first_child();
     while let Some(widget) = child {
         let next = widget.next_sibling();
-        widget.set_can_target(false);
+        if widget.type_().name().starts_with("GtkList") {
+            widget.set_can_target(false);
+        }
         child = next;
     }
+}
+
+/// The pure core of [`entry_at_point`]: the first `(bounds, entry)`
+/// pair whose bounds contain `point`, scanned in row order.
+fn entry_in_bounds(
+    point: graphene::Point,
+    rows: &[(graphene::Rect, GalleryEntry)],
+) -> Option<GalleryEntry> {
+    rows.iter()
+        .find(|(bounds, _)| bounds.contains_point(&point))
+        .map(|(_, entry)| entry.clone())
+}
+
+/// Pointer identity of a tile root — the key of the tile-root → entry
+/// map (entries are refcounted; keys are not dereferenced).
+fn tile_key(widget: &impl IsA<gtk::Widget>) -> usize {
+    widget
+        .upcast_ref::<gtk::Widget>()
+        .upcast_ref::<glib::Object>()
+        .as_ptr() as usize
 }
 
 /// Entry under the grid point `(x, y)` — a manual hit-test over the
@@ -787,6 +849,9 @@ fn strip_item_targets(grid: &gtk::GridView) {
 /// The link back to the model is the tile-root → entry map populated
 /// at bind time (GTK 4.14's `GtkListItemWidget` is private, so the
 /// tile root — the widget's first child — is the key).
+///
+/// All GTK calls happen while the map's `RefCell` is free: the widget
+/// geometry is collected first, the map is borrowed only afterwards.
 fn entry_at_point(
     grid: &gtk::GridView,
     x: f64,
@@ -794,22 +859,55 @@ fn entry_at_point(
     tile_entries: &Rc<RefCell<HashMap<usize, GalleryEntry>>>,
 ) -> Option<GalleryEntry> {
     let point = graphene::Point::new(x as f32, y as f32);
-    let mut hit = None;
+    let mut keys = Vec::new();
     let mut child = grid.first_child();
     while let Some(widget) = child {
         let next = widget.next_sibling();
         if let Some(bounds) = widget.compute_bounds(grid)
-            && bounds.contains_point(&point)
+            && let Some(root) = widget.first_child()
         {
-            hit = widget.first_child();
-            break;
+            keys.push((bounds, tile_key(&root)));
         }
         child = next;
     }
-    hit.and_then(|root| {
-        tile_entries
-            .borrow()
-            .get(&(root.upcast::<glib::Object>().as_ptr() as usize))
-            .cloned()
-    })
+    let entries = tile_entries.borrow();
+    let rows: Vec<(graphene::Rect, GalleryEntry)> = keys
+        .into_iter()
+        .filter_map(|(bounds, key)| entries.get(&key).cloned().map(|e| (bounds, e)))
+        .collect();
+    drop(entries);
+    entry_in_bounds(point, &rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tile_bounds(y: f32) -> graphene::Rect {
+        graphene::Rect::new(0.0, y, 200.0, 170.0)
+    }
+
+    /// M5 review regression: the grid-level gestures resolve a click
+    /// point to the row under it — bounds and entry must line up, and
+    /// a miss must not select anything.
+    #[test]
+    fn hit_test_maps_point_to_entry() {
+        let a = GalleryEntry::for_recording(Path::new("/v/a.mp4"));
+        let b = GalleryEntry::for_recording(Path::new("/v/b.mp4"));
+        let rows = [
+            (tile_bounds(0.0), a.clone()),
+            (tile_bounds(180.0), b.clone()),
+        ];
+
+        assert!(
+            entry_in_bounds(graphene::Point::new(100.0, 100.0), &rows)
+                .is_some_and(|entry| entry.path() == a.path())
+        );
+        assert!(
+            entry_in_bounds(graphene::Point::new(100.0, 200.0), &rows)
+                .is_some_and(|entry| entry.path() == b.path())
+        );
+        assert!(entry_in_bounds(graphene::Point::new(100.0, 500.0), &rows).is_none());
+        assert!(entry_in_bounds(graphene::Point::new(250.0, 100.0), &rows).is_none());
+    }
 }
