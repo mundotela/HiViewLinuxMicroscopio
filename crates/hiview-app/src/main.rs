@@ -10,6 +10,7 @@ mod app;
 mod cli;
 mod services;
 mod strings;
+mod toast;
 mod widgets;
 
 use clap::Parser;

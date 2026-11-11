@@ -216,7 +216,8 @@ pub struct AppModel {
     toast_overlay: adw::ToastOverlay,
     /// The toast currently on screen; dismissed before showing a new
     /// one so a persistent toast can never hide the queue behind it.
-    current_toast: Option<adw::Toast>,
+    /// The displayed toast so a new one can replace it (crate::toast).
+    toasts: crate::toast::ToastTracker<adw::Toast>,
     shutter_flash: gtk::Box,
     /// Folder row of the open preferences dialog, to refresh its subtitle.
     pref_folder_row: Option<adw::ActionRow>,
@@ -528,7 +529,7 @@ impl SimpleComponent for AppModel {
             config_recovered,
             photos,
             toast_overlay: adw::ToastOverlay::new(),
-            current_toast: None,
+            toasts: crate::toast::ToastTracker::default(),
             shutter_flash: gtk::Box::new(gtk::Orientation::Vertical, 0),
             pref_folder_row: None,
             mode_video_btn: gtk::ToggleButton::new(),
@@ -546,6 +547,9 @@ impl SimpleComponent for AppModel {
 
         let widgets = view_output!();
         model.grab_widgets(&widgets);
+        // Debug aid (M4 orphan-overlay bug): log the actual widget tree
+        // so a toast targeting an off-screen overlay is visible in logs.
+        dump_widget_tree(&root, 0);
         if model.config_recovered {
             model.show_toast(adw::Toast::new(strings::CONFIG_RECOVERED));
         }
@@ -781,6 +785,11 @@ impl AppModel {
         self.viewport = widgets.viewport.clone();
         self.menu_button = widgets.menu_button.clone();
         self.mode_video_btn = widgets.mode_video_btn.clone();
+        // Without these binds the fields keep the `::new()` instances
+        // created in init — off-screen orphans: every toast went to an
+        // overlay that is not in the widget tree (toasts never visible).
+        self.toast_overlay = widgets.toast_overlay.clone();
+        self.shutter_flash = widgets.shutter_flash.clone();
     }
 
     /// Syncs derived UI after a camera state change.
@@ -932,9 +941,9 @@ impl AppModel {
     /// later toast forever, which is exactly what swallowed the
     /// recording-end toasts in M4 review.
     fn show_toast(&mut self, toast: adw::Toast) {
-        if let Some(current) = self.current_toast.take() {
-            current.dismiss();
-        }
+        // A persistent toast hides every toast queued behind it —
+        // replace the displayed one instead of queueing.
+        self.toasts.replace(toast.clone());
         // Diagnostic for manual testing: distinguishes "never shown"
         // from "shown but expired before the user looked".
         let shown = Instant::now();
@@ -945,7 +954,6 @@ impl AppModel {
                 shown.elapsed()
             );
         });
-        self.current_toast = Some(toast.clone());
         self.toast_overlay.add_toast(toast);
     }
 
@@ -1299,6 +1307,24 @@ impl AppModel {
         page.add(&group);
         dialog.add(&page);
         dialog.present(Some(&self.window));
+    }
+}
+
+/// Logs the visible widget tree (window → content → …) at debug level.
+/// Written for the M4 orphan-overlay bug: `AppModel` kept an
+/// `adw::ToastOverlay::new()` that was never in the tree, so every toast
+/// went to an off-screen overlay — this dump makes that class of bug
+/// visible in `RUST_LOG=debug` output.
+fn dump_widget_tree(widget: &(impl IsA<gtk::Widget> + gtk::prelude::BuildableExt), depth: usize) {
+    let id = widget
+        .buildable_id()
+        .map(|id| format!(" #{id}"))
+        .unwrap_or_default();
+    tracing::debug!("{}{}{}", "  ".repeat(depth), widget.type_().name(), id);
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        dump_widget_tree(&c, depth + 1);
+        child = c.next_sibling();
     }
 }
 
