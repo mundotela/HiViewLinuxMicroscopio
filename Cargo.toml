@@ -27,6 +27,7 @@ relm4 = { version = "0.11", features = ["gnome_46", "libadwaita"] }
 gst = { package = "gstreamer", version = "0.25", features = ["v1_24"], default-features = false }
 gst-app = { package = "gstreamer-app", version = "0.25", features = ["v1_24"], default-features = false }
 gst-video = { package = "gstreamer-video", version = "0.25", features = ["v1_24"], default-features = false }
+gst-pbutils = { package = "gstreamer-pbutils", version = "0.25", features = ["v1_24"], default-features = false }
 udev = "0.9"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }

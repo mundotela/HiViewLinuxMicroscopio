@@ -76,11 +76,19 @@ impl PhotoResolution {
 /// (docs/ARCHITECTURE.md §6.6).
 #[must_use]
 pub fn photo_filename(at: DateTime<Local>, format: PhotoFormat) -> String {
-    format!(
-        "HiView_{}.{}",
-        at.format("%Y-%m-%d_%H-%M-%S"),
-        format.extension()
-    )
+    media_filename(at, format.extension())
+}
+
+/// Video file name for a capture instant: `HiView_AAAA-MM-DD_HH-MM-SS.mp4`
+/// (docs/ARCHITECTURE.md §6.7). Same pattern and collision rule as photos.
+#[must_use]
+pub fn video_filename(at: DateTime<Local>) -> String {
+    media_filename(at, "mp4")
+}
+
+/// Shared `HiView_<timestamp>.<ext>` naming for captured media.
+fn media_filename(at: DateTime<Local>, ext: &str) -> String {
+    format!("HiView_{}.{}", at.format("%Y-%m-%d_%H-%M-%S"), ext)
 }
 
 /// Returns `dir/filename`, or `…_2`, `…_3`, … on collision (§6.6).
@@ -205,6 +213,21 @@ mod tests {
         assert_eq!(
             photo_filename(at, PhotoFormat::Jpeg),
             "HiView_2026-11-11_14-30-05.jpg"
+        );
+        assert_eq!(video_filename(at), "HiView_2026-11-11_14-30-05.mp4");
+    }
+
+    /// Videos follow the same `_N` collision suffixes as photos (§6.7).
+    #[test]
+    fn video_names_get_collision_suffixes() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let first = unique_photo_path(dir.path(), "HiView_2026-11-11_14-30-05.mp4");
+        fs::write(&first, b"a").unwrap_or_else(|e| panic!("write: {e}"));
+        assert_eq!(
+            unique_photo_path(dir.path(), "HiView_2026-11-11_14-30-05.mp4")
+                .file_name()
+                .and_then(|n| n.to_str()),
+            Some("HiView_2026-11-11_14-30-05_2.mp4")
         );
     }
 
