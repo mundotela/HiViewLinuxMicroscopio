@@ -508,7 +508,7 @@ impl AppModel {
             ),
         );
         for camera in self.camera.cameras() {
-            let (label, target) = camera_menu_entry(camera, self.camera.cameras());
+            let (label, target) = Self::camera_menu_entry(camera, self.camera.cameras());
             cameras_menu.append_item(
                 &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(&label, &target),
             );
@@ -534,5 +534,59 @@ impl AppModel {
             tracing::debug!("rendered: {label}");
             self.fps_label = label;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    fn fake_camera(name: &str, node: &str, usb_path: Option<&str>) -> CameraDescriptor {
+        CameraDescriptor {
+            dev_node: PathBuf::from(node),
+            name: name.into(),
+            usb_vid: Some(0x1111),
+            usb_pid: Some(0x2222),
+            usb_path: usb_path.map(str::to_string),
+            is_microscope: false,
+            modes: Vec::new(),
+        }
+    }
+
+    /// Regression for the M1 review bug: the menu action target must be
+    /// the stable id (usb path), never the /dev node that selected_for
+    /// cannot match.
+    #[test]
+    fn menu_target_is_stable_id_not_device_node() {
+        let cam = fake_camera("HD camera", "/dev/video2", Some("pci-usb-0:5"));
+        let (_, target) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam));
+        assert_eq!(target, "pci-usb-0:5");
+        assert_ne!(target, cam.dev_node.to_string_lossy());
+    }
+
+    #[test]
+    fn menu_label_is_friendly_name_without_node() {
+        let cam = fake_camera("ACER HD User Facing: ACER HD Us", "/dev/video0", Some("p"));
+        let (label, _) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam));
+        assert_eq!(label, "ACER HD User Facing");
+    }
+
+    #[test]
+    fn menu_label_appends_node_only_for_duplicate_names() {
+        let a = fake_camera("HD camera", "/dev/video0", Some("p1"));
+        let b = fake_camera("HD camera", "/dev/video2", Some("p2"));
+        let cams = [a.clone(), b];
+        let (label, _) = AppModel::camera_menu_entry(&a, &cams);
+        assert_eq!(label, "HD camera (/dev/video0)");
+    }
+
+    #[test]
+    fn microscope_keeps_fixed_label() {
+        let mut cam = fake_camera("HD camera", "/dev/video2", Some("p"));
+        cam.is_microscope = true;
+        let (label, _) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam));
+        assert_eq!(label, strings::MICROSCOPE_LABEL);
     }
 }
