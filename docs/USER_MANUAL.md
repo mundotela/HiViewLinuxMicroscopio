@@ -134,6 +134,7 @@ O que entra na foto:
 |---|---|
 | Formato | PNG (melhor qualidade, padrão) ou JPEG (arquivo menor) |
 | Resolução | Nativa 640×480 · 1280×960 *(interpolada)* · 1600×1200 *(interpolada)* |
+| Pasta | Pasta onde as fotos são salvas (padrão: **Imagens/HiView**) |
 | Redução de ruído | Desligada · 4 · 8 · 16 quadros. Combina várias capturas numa foto mais limpa. **Mantenha o microscópio e o objeto parados** durante a captura (menos de 1 segundo) |
 | Gravar sobreposições | Inclui grade, mira e medidas na foto |
 

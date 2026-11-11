@@ -73,3 +73,45 @@ pub const FREEZE_TOOLTIP: &str = "Congelar a imagem (F)";
 
 /// Badge shown on top of the frozen frame.
 pub const FROZEN_BADGE: &str = "CONGELADO";
+
+/// Tooltip of the shutter toolbar button (`Espaço`).
+pub const SHUTTER_TOOLTIP: &str = "Tirar foto (Espaço)";
+
+/// Toast shown after a photo is written.
+pub const PHOTO_SAVED: &str = "Foto salva";
+
+/// Toast shown when a photo could not be written.
+pub const PHOTO_SAVE_FAILED: &str = "Não foi possível salvar a foto";
+
+/// Toast button that opens the saved photo.
+pub const OPEN_BUTTON: &str = "Abrir";
+
+/// Toast shown when the config file was invalid and reset (§6.12).
+pub const CONFIG_RECOVERED: &str = "Configuração inválida — padrões restaurados";
+
+/// Label of the preferences menu item and dialog (`Ctrl+,`).
+pub const PREFERENCES_LABEL: &str = "Preferências";
+
+/// Title of the "Fotos" preferences page.
+pub const PREFS_PHOTOS_PAGE: &str = "Fotos";
+
+/// Label of the format combo in preferences.
+pub const PREFS_FORMAT_LABEL: &str = "Formato";
+
+/// Label of the resolution combo in preferences.
+pub const PREFS_RESOLUTION_LABEL: &str = "Resolução";
+
+/// Label of the folder row in preferences.
+pub const PREFS_FOLDER_LABEL: &str = "Pasta";
+
+/// Button that opens the folder picker in preferences.
+pub const PREFS_FOLDER_BUTTON: &str = "Alterar…";
+
+/// Resolution option: sensor native size.
+pub const RES_NATIVE_LABEL: &str = "Nativa (640×480)";
+
+/// Resolution option: 2× interpolated.
+pub const RES_1280_LABEL: &str = "1280×960 (interpolada)";
+
+/// Resolution option: 2.5× interpolated.
+pub const RES_1600_LABEL: &str = "1600×1200 (interpolada)";
