@@ -716,6 +716,7 @@ dependencies = [
  "clap",
  "gtk4",
  "hiview-capture",
+ "hiview-core",
  "libadwaita",
  "relm4",
  "tracing",

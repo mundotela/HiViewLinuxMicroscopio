@@ -102,12 +102,13 @@ No modo Bancada, um **painel lateral** mostra as ferramentas de medição, grade
 |---|---|
 | **Aproximar/afastar (zoom)** | Roda do mouse (aproxima onde está o cursor), botões ⊕ ⊖ ou teclas `+` `-` |
 | **Mover a imagem** | Clique e arraste |
-| **Ajustar à janela** | Tecla `0` ou duplo clique |
-| **Tamanho real (100%)** | Tecla `1` ou duplo clique |
+| **Ajustar à janela** | Tecla `0` |
+| **Tamanho real (100%)** | Tecla `1` |
+| **Alternar ajuste/100%** | Duplo clique — alterna entre ajustar à janela e 100% |
 | **Espelhar** | `H` (horizontal) / `V` (vertical) |
 | **Girar** | `[` e `]` (90° para cada lado) |
 | **Tela cheia** | `F11` (sair: `Esc`) |
-| **Congelar a imagem** | `F` ou botão ❄. A imagem para e você pode medir ou fotografar com calma. Aperte de novo para voltar ao vivo |
+| **Congelar a imagem** | `F` ou botão ❄. A imagem para (a tela mostra **CONGELADO** com uma borda âmbar) e a câmera continua filmando por baixo. Aperte de novo para voltar ao vivo |
 
 > O zoom do programa é **digital**: ele aumenta a imagem na tela, mas não cria detalhe novo. Para ampliar de verdade, use o anel do microscópio ou aproxime o aparelho do objeto.
 >
