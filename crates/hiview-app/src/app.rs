@@ -527,9 +527,16 @@ impl SimpleComponent for AppModel {
                 if self.state == CameraState::Streaming
                     && let Some(frame) = self.viewport.photo_frame()
                 {
-                    self.flash_shutter();
-                    self.photos
-                        .take(&frame, &self.config.photo, self.photo_dir());
+                    if self
+                        .photos
+                        .take(&frame, &self.config.photo, self.photo_dir())
+                        .is_ok()
+                    {
+                        self.flash_shutter();
+                    } else {
+                        self.toast_overlay
+                            .add_toast(adw::Toast::new(strings::PHOTO_BUSY));
+                    }
                 }
             }
             Input::PhotoDone(outcome) => self.on_photo_done(outcome),

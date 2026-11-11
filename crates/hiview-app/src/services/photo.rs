@@ -22,6 +22,19 @@ pub enum PhotoOutcome {
     Failed(String),
 }
 
+/// Maximum photos waiting in the worker queue (M3 review): further
+/// shots are rejected instead of piling up.
+const PHOTO_QUEUE_CAPACITY: usize = 16;
+
+/// Why a shot could not be queued.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TakeRejected {
+    /// Queue is full — the worker is still encoding previous shots.
+    Busy,
+    /// The worker thread is gone.
+    Gone,
+}
+
 struct PhotoJob {
     data: glib::Bytes,
     width: u32,
@@ -33,7 +46,7 @@ struct PhotoJob {
 
 /// Handle to the background photo worker.
 pub struct PhotoService {
-    jobs: mpsc::Sender<PhotoJob>,
+    jobs: mpsc::SyncSender<PhotoJob>,
 }
 
 impl PhotoService {
@@ -44,7 +57,7 @@ impl PhotoService {
     where
         F: Fn(PhotoOutcome) + Send + 'static,
     {
-        let (tx, rx) = mpsc::channel::<PhotoJob>();
+        let (tx, rx) = mpsc::sync_channel::<PhotoJob>(PHOTO_QUEUE_CAPACITY);
         std::thread::Builder::new()
             .name("hiview-photo".into())
             .spawn(move || {
@@ -69,8 +82,18 @@ impl PhotoService {
         Self { jobs: tx }
     }
 
-    /// Queues a photo save. Cheap: the frame's pixel buffer is refcounted.
-    pub fn take(&self, frame: &Frame, prefs: &PhotoConfig, dir: PathBuf) {
+    /// Queues a photo save (non-blocking). Cheap: the frame's pixel
+    /// buffer is refcounted. Returns [`TakeRejected::Busy`] when the
+    /// queue is full — the shot is dropped, never deferred silently.
+    ///
+    /// # Errors
+    /// Returns [`TakeRejected`] when the job could not be queued.
+    pub fn take(
+        &self,
+        frame: &Frame,
+        prefs: &PhotoConfig,
+        dir: PathBuf,
+    ) -> Result<(), TakeRejected> {
         let job = PhotoJob {
             data: frame.data.clone(),
             width: frame.width,
@@ -79,8 +102,52 @@ impl PhotoService {
             prefs: prefs.clone(),
             dir,
         };
-        if self.jobs.send(job).is_err() {
-            tracing::error!("photo worker is gone; photo dropped");
+        match self.jobs.try_send(job) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => {
+                tracing::debug!("photo queue full ({PHOTO_QUEUE_CAPACITY}); shot dropped");
+                Err(TakeRejected::Busy)
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                tracing::error!("photo worker is gone; photo dropped");
+                Err(TakeRejected::Gone)
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hiview_capture::PixelFormat;
+
+    use super::*;
+
+    fn frame() -> Frame {
+        Frame {
+            width: 1,
+            height: 1,
+            stride: 4,
+            format: PixelFormat::Rgba,
+            data: glib::Bytes::from_owned(vec![0; 4]),
+            pts: None,
+        }
+    }
+
+    /// A shot beyond the 16-deep queue is rejected immediately —
+    /// `try_send` never blocks the UI thread.
+    #[test]
+    fn full_queue_rejects_shot_without_blocking() {
+        let (tx, rx) = mpsc::sync_channel::<PhotoJob>(PHOTO_QUEUE_CAPACITY);
+        let service = PhotoService { jobs: tx };
+        let prefs = PhotoConfig::default();
+        let dir = PathBuf::from("/tmp");
+        for _ in 0..PHOTO_QUEUE_CAPACITY {
+            service
+                .take(&frame(), &prefs, dir.clone())
+                .unwrap_or_else(|e| panic!("queue should accept: {e:?}"));
+        }
+        // Receiver alive but never drained → the next shot is rejected.
+        assert_eq!(service.take(&frame(), &prefs, dir), Err(TakeRejected::Busy));
+        drop(rx);
     }
 }

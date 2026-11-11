@@ -115,3 +115,6 @@ pub const RES_1280_LABEL: &str = "1280×960 (interpolada)";
 
 /// Resolution option: 2.5× interpolated.
 pub const RES_1600_LABEL: &str = "1600×1200 (interpolada)";
+
+/// Toast shown when the photo queue is full and a shot is dropped.
+pub const PHOTO_BUSY: &str = "Salvando fotos, aguarde…";
