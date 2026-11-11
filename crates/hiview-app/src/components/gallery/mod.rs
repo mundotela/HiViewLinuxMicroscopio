@@ -13,6 +13,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use entry::{GalleryEntry, build_tile};
@@ -84,6 +85,11 @@ pub struct GalleryInit {
     /// Application window, parent of dialogs and file launchers.
     pub window: adw::ApplicationWindow,
 }
+
+/// Live gallery pages — logged on every open as proof that the app
+/// keeps exactly one page and pushes/pops it instead of building a
+/// new component per open (M5 review).
+static GALLERY_INSTANCES: AtomicUsize = AtomicUsize::new(0);
 
 /// The gallery page model.
 pub struct GalleryModel {
@@ -191,6 +197,7 @@ impl SimpleComponent for GalleryModel {
         _root: Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
+        GALLERY_INSTANCES.fetch_add(1, Ordering::SeqCst);
         let cache_dir = hiview_core::cache_dir();
         let thumbs = ThumbService::new(cache_dir.clone(), {
             let sender = sender.clone();
@@ -357,6 +364,10 @@ impl SimpleComponent for GalleryModel {
             } => {
                 self.photo_dir = photo_dir.clone();
                 self.video_dir = video_dir.clone();
+                tracing::info!(
+                    "gallery: opened (live pages: {})",
+                    GALLERY_INSTANCES.load(Ordering::SeqCst)
+                );
                 self.opened_at = Some(Instant::now());
                 self.first_thumb_logged = false;
                 self.all_thumbs_logged = false;
@@ -386,6 +397,15 @@ impl SimpleComponent for GalleryModel {
             }
             Input::ItemReady(item) => self.on_item_ready(item),
             Input::RecordingStarted(path) => {
+                // Keyed by the recording path: at most one synthetic
+                // tile per recording — reopening the gallery during a
+                // recording re-emits this input and must be a no-op.
+                if let Some(existing) = &self.recording_entry {
+                    if existing.path() == path {
+                        return;
+                    }
+                    self.remove_recording_tile();
+                }
                 let entry = GalleryEntry::for_recording(&path);
                 self.recording_entry = Some(entry.clone());
                 self.store.insert(0, &entry);
@@ -393,10 +413,7 @@ impl SimpleComponent for GalleryModel {
                 self.sync_empty();
             }
             Input::RecordingEnded => {
-                if self.recording_entry.take().is_some() {
-                    self.store.remove(0);
-                    self.sync_empty();
-                }
+                self.remove_recording_tile();
             }
             Input::RecordElapsed(elapsed) => {
                 self.recording_elapsed = elapsed;
@@ -458,6 +475,19 @@ impl GalleryModel {
     /// Path of the in-progress recording, filtered out of scans.
     fn recording_path(&self) -> Option<PathBuf> {
         self.recording_entry.as_ref().map(|e| e.path())
+    }
+
+    /// Removes the synthetic recording tile wherever it sits — removed
+    /// by lookup, not by assuming index 0, so a tile displaced by a
+    /// concurrent merge can't survive as a zombie "Gravando…".
+    fn remove_recording_tile(&mut self) {
+        let Some(entry) = self.recording_entry.take() else {
+            return;
+        };
+        if let Some(pos) = self.store.find(&entry) {
+            self.store.remove(pos);
+        }
+        self.sync_empty();
     }
 
     /// Entry displayed at store `position`.
@@ -728,6 +758,12 @@ impl GalleryModel {
             hiview_core::evict_cached_thumbs(&cache, &path);
         }));
         sender.output_sender().emit(Output::Toast(strings::TRASHED));
+    }
+}
+
+impl Drop for GalleryModel {
+    fn drop(&mut self) {
+        GALLERY_INSTANCES.fetch_sub(1, Ordering::SeqCst);
     }
 }
 

@@ -482,6 +482,36 @@ mod tests {
         assert!(entry.has_thumb());
     }
 
+    /// M5 review regression: the recording tile is keyed by path and
+    /// removed by lookup, not by index 0. The old code inserted a tile
+    /// on every gallery open during a recording (duplicates) and
+    /// removed only `store[0]` on `RecordingEnded`, leaving earlier
+    /// tiles as zombie "Gravando…" spinners.
+    #[test]
+    fn recording_tile_dedup_and_lookup_removal() {
+        let store = gio::ListStore::new::<GalleryEntry>();
+        let path_a = PathBuf::from("/v/a.mp4");
+        let path_b = PathBuf::from("/v/b.mp4");
+
+        let rec_a = GalleryEntry::for_recording(&path_a);
+        store.insert(0, &rec_a);
+        // Re-emitted `RecordingStarted` for the same path is a no-op
+        // (the update() guard is `existing.path() == path`).
+        assert_eq!(rec_a.path(), path_a);
+        assert_eq!(store.n_items(), 1);
+
+        // A different recording's tile above it displaces it — the
+        // removal must find it by lookup, not assume index 0.
+        let rec_b = GalleryEntry::for_recording(&path_b);
+        store.insert(0, &rec_b);
+        assert_eq!(store.find(&rec_a), Some(1));
+        if let Some(pos) = store.find(&rec_a) {
+            store.remove(pos);
+        }
+        assert_eq!(store.n_items(), 1);
+        assert_eq!(store.find(&rec_b), Some(0));
+    }
+
     /// A changed file (same path, new mtime/size) drops its thumbnail so
     /// a fresh one is requested — stale thumbs are never shown.
     #[test]
