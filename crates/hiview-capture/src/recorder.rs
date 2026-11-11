@@ -279,6 +279,9 @@ impl Recorder {
         if let Err(err) = self.pipeline.set_state(gst::State::Null) {
             warn!("failed to stop record pipeline: {err}");
         }
+        // set_state may report Async: wait for the transition so filesink
+        // has flushed and closed the MP4 before this returns.
+        let _ = self.pipeline.state(gst::ClockTime::from_seconds(5));
         if let Some(thread) = self.bus_thread.take() {
             let _ = thread.join();
         }
@@ -386,6 +389,12 @@ fn build_record_pipeline(
     )?;
     let parse = make("h264parse")?;
     let mux = make("mp4mux")?;
+    // Fragmented MP4 (engineering decision, §6.7): one self-contained
+    // fragment per second, moov first. A crash, SIGKILL or power loss
+    // still leaves a seekable file, losing at most the last second. The
+    // EOS finalize remains mandatory for a complete `moov`.
+    mux.set_property("fragment-duration", 1000_u32);
+    mux.set_property_from_str("fragment-mode", "first-moov-then-finalise");
     let sink = make("filesink")?;
     sink.set_property("location", path.to_string_lossy().as_ref());
 

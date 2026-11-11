@@ -179,3 +179,55 @@ fn source_death_mid_recording_keeps_playable_file() {
     assert_eq!((width, height), (640, 480));
     assert!(decode_frame_count(&stop.path) >= 15, "file does not decode");
 }
+
+/// Abrupt teardown without EOS — the equivalent of SIGKILL or a crash:
+/// `Drop` sets the pipeline to `Null` without ever sending
+/// `end_of_stream`. Thanks to `mp4mux fragment-duration=1000` the file
+/// must still be discoverable and decodable up to the last fragment.
+#[test]
+fn abrupt_teardown_keeps_fragmented_file_playable() {
+    LazyLock::force(&GST_INIT);
+    let dir = temp_dir();
+    let bus = FrameBus::default();
+    let (tx, _rx) = mpsc::channel();
+    let pipeline = CapturePipeline::start(CaptureSource::Test, bus.clone(), move |e| {
+        let _ = tx.send(e);
+    })
+    .unwrap_or_else(|e| panic!("capture failed to start: {e}"));
+    wait_for_first_frame(&bus);
+
+    let recorder = Recorder::start(bus.subscribe(), 640, 480, 30, 1, &dir, |err| {
+        panic!("record pipeline error: {err}")
+    })
+    .unwrap_or_else(|e| panic!("recorder failed to start: {e}"));
+
+    std::thread::sleep(Duration::from_millis(2500));
+    let path = recorder.path().to_path_buf();
+    drop(recorder); // no EOS: same on-disk state as a killed process
+    std::thread::sleep(Duration::from_millis(400));
+    drop(pipeline);
+
+    // The tail `moov` lands when the muxer shuts down; poll briefly
+    // instead of racing it.
+    let mut probe = None;
+    for _ in 0..40 {
+        match std::panic::catch_unwind(|| probe_video(&path)) {
+            Ok(p) => {
+                probe = Some(p);
+                break;
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+    let (_duration, profile, width, height) =
+        probe.unwrap_or_else(|| panic!("file never became discoverable"));
+    assert_eq!(profile, "constrained-baseline");
+    assert_eq!((width, height), (640, 480));
+    // At least one 1 s fragment must have been written and decodable;
+    // the trailing partial fragment may be lost by design.
+    let decoded = decode_frame_count(&path);
+    assert!(
+        decoded >= 15,
+        "only {decoded} frames decodable from a killed recording"
+    );
+}
