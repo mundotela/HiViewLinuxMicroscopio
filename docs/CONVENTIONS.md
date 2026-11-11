@@ -160,6 +160,11 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - Ao concluir: relatório em `docs/reports/M<N>.md` (seguindo `DEVIN_REPORT_TEMPLATE.md`), commitado no branch e também colado no chat.
 - **Proibido:** `git push`, abrir PR, fazer merge em `main`, reescrever histórico (`rebase`/`reset --hard`/`push --force`) de `main`. Tudo isso é papel da engenharia.
 
+## 11.0 Medições e testes manuais
+
+- Toda medição de CPU/fps citada em relatório é feita em **build release** (`cargo run --release`) e diz isso explicitamente. Números em debug só valem como informação adicional.
+- Uma instância do app entregue ao Henrique para teste manual **nunca** roda com `timeout` nem é encerrada pelo Devin sem aviso. Se precisar de uma instância temporária para medição, use outra janela/instância e avise.
+
 ## 11.1 Segurança na máquina local
 
 - **Nunca** rode `sudo`, `apt`, `pip install --user` ou qualquer comando que altere o sistema, nem escreva fora da pasta do projeto (exceção: `~/.cargo`, que o próprio cargo gerencia).
