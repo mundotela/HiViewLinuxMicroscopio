@@ -348,6 +348,7 @@ mod tests {
         assert_eq!(overlays_for(AppMode::Bench, &state), None);
         state.measure.items.push(crate::measure::Measurement {
             id: 1,
+            tool: crate::measure::MeasureTool::Ruler,
             shape: crate::measure::MeasureShape::Line {
                 a: Point::new(0.0, 0.0),
                 b: Point::new(10.0, 0.0),
@@ -365,6 +366,7 @@ mod tests {
         state.measure.px_per_mm = Some(89.0);
         state.measure.items.push(crate::measure::Measurement {
             id: 1,
+            tool: crate::measure::MeasureTool::Ruler,
             shape: crate::measure::MeasureShape::Circle {
                 center: Point::new(1.0, 1.0),
                 edge: Point::new(2.0, 1.0),

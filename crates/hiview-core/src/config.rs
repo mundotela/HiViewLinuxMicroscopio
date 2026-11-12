@@ -341,8 +341,10 @@ mod tests {
     /// profile) resolves to no calibration — pixel results, no crash.
     #[test]
     fn dangling_active_name_is_no_calibration() {
-        let mut config = AppConfig::default();
-        config.active_calibration = Some("gone".into());
+        let config = AppConfig {
+            active_calibration: Some("gone".into()),
+            ..AppConfig::default()
+        };
         assert!(config.active_profile().is_none());
     }
 

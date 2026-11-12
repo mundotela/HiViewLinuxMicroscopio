@@ -16,6 +16,7 @@ mod imaging;
 mod measure;
 mod orientation;
 mod overlay;
+mod pngmeta;
 mod view;
 
 pub use adjust::{
@@ -36,9 +37,9 @@ pub use imaging::{
     render_photo, rgba_image, save_photo, save_photo_with, unique_photo_path, video_filename,
 };
 pub use measure::{
-    CalibrationProfile, DraftView, MeasureGesture, MeasureSession, MeasureShape, MeasureTool,
-    Measurement, OrientationOp, angle_deg, distance, format_angle_deg, format_length_px, map_point,
-    mapped_size,
+    CalibrationProfile, DraftView, MeasureCommit, MeasureGesture, MeasureSession, MeasureSet,
+    MeasureShape, MeasureTool, Measurement, angle_deg, distance, format_angle_deg,
+    format_length_px, remap_point, remapped_size,
 };
 pub use orientation::{Orientation, ViewOrientation};
 pub use overlay::{
@@ -48,4 +49,5 @@ pub use overlay::{
     MIN_GRID_SPACING_MM, MIN_GRID_SPACING_PX, MeasureOverlay, OverlayColor, OverlayState,
     grid_line_positions, image_center, overlays_for,
 };
+pub use pngmeta::{extract_png_text, inject_png_text};
 pub use view::{MAX_SCALE, MIN_SCALE, NEAREST_FILTER_SCALE, Point, Size, ViewMode, ViewTransform};

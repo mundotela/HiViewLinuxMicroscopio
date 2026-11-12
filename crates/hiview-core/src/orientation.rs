@@ -62,6 +62,18 @@ impl ViewOrientation {
         self.quarters_cw
     }
 
+    /// Whether the displayed image is mirrored left-right (`H`).
+    #[must_use]
+    pub fn mirror_h(&self) -> bool {
+        self.mirror_h
+    }
+
+    /// Whether the displayed image is mirrored top-bottom (`V`).
+    #[must_use]
+    pub fn mirror_v(&self) -> bool {
+        self.mirror_v
+    }
+
     /// The single `videoflip` method equivalent to the current state.
     ///
     /// Composition is `screen_mirror ∘ rotation`: the rotation turns the
