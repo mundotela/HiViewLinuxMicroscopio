@@ -157,13 +157,9 @@ hiview/
 v4l2src device=<dev_node> do-timestamp=true
   ! video/x-raw,format=YUY2,width=640,height=480,framerate=30/1
   ! videoconvert
-  ! videobalance name=balance            (brilho, contraste, saturação — §6.11)
-  ! gamma name=gamma                     (gama — §6.11)
-  ! [nitidez opcional — §6.11]
-  ! videoconvert
   ! video/x-raw,format=RGBA
   ! videoflip name=flip video-direction=identity
-  ! appsink name=sink sync=false max-buffers=1 drop=true emit-signals=false
+  ! appsink name=sink sync=false max-buffers=4 drop=true
 ```
 
 - As caps vêm de `CaptureMode`, construído a partir do que o dispositivo anuncia (sondado pelo `gst::DeviceMonitor`). **Nada fica fixo no código além do padrão.**
@@ -307,20 +303,22 @@ A interpretação "clique curto/longo" fica no app, não na fonte:
 
 ### 6.11 Ajustes de imagem (por software)
 
-O microscópio **não expõe nenhum controle V4L2** (§2). Os ajustes são feitos **no pipeline de captura**, antes do `videoflip`, e por isso aparecem na tela, na foto e no vídeo.
+O microscópio **não expõe nenhum controle V4L2** (§2). Os ajustes são feitos **em Rust**, sobre cada frame RGBA copiado no callback do `appsink`, antes da publicação no `FrameBus` — por isso aparecem na tela, na foto e no vídeo, que consomem os mesmos pixels.
 
-| Ajuste | Elemento | Faixa na UI |
+A implementação mora em `hiview-core::image_adjust` (Rust puro, testável, sem GTK/GStreamer). O `CapturePipeline::set_adjust` compila um `AdjustPlan` e o troca atomicamente no estado compartilhado com o callback — ajuste **ao vivo**, sem reconstruir o pipeline. Com todos os valores no padrão o plano é `None` e o frame passa **bit-exacto**, custo zero.
+
+| Ajuste | Implementação | Faixa na UI |
 |---|---|---|
-| Brilho | `videobalance.brightness` | −1,0 … +1,0 (padrão 0) |
-| Contraste | `videobalance.contrast` | 0 … 2,0 (padrão 1) |
-| Saturação | `videobalance.saturation` | 0 … 2,0 (padrão 1) |
-| Gama | `gamma.gamma` | 0,3 … 3,0 (padrão 1) |
-| Nitidez | `gaussianblur` com `sigma` **negativo** (gst-plugins-bad, `gaudieffects`; exige `videoconvert` para AYUV ao redor) | 0 … 100% (padrão 0, mapeado para sigma 0 … −0,39 — teto imposto pelo orçamento de CPU de §7, ver `docs/reports/M7.md` §9) |
+| Brilho | LUT de 256 entradas | −1,0 … +1,0 (padrão 0) |
+| Contraste | mesma LUT (pivô no cinza médio) | 0 … 2,0 (padrão 1) |
+| Gama | mesma LUT (`x^(1/γ)`; γ>1 levanta médios) | 0,3 … 3,0 (padrão 1) |
+| Saturação | mistura com luma BT.601, aritmética inteira | 0 … 2,0 (padrão 1) |
+| Nitidez | unsharp mask 3×3, aritmética inteira, bordas replicadas | 0 … 100% contínuo (padrão 0) |
 
-- As propriedades são alteradas **ao vivo**, sem reiniciar o pipeline.
-- Com todos os valores no padrão, o ramo de nitidez fica fora do pipeline (ou em passthrough), para não gastar CPU.
-- Se `gaussianblur` não estiver disponível no sistema, o controle de nitidez fica oculto (verificar com `ElementFactory::find`).
+- Brilho + contraste + gama fundem-se em **uma LUT** recalculada só quando um valor muda; a nitidez usa um anel de três linhas (estágio 1 computado na hora), num **único passe** por frame, sem cópia do quadro inteiro.
+- Cada estágio só roda quando o valor sai do padrão.
 - Valores salvos por dispositivo (chave = VID:PID) e reaplicados ao conectar. Botão "Restaurar padrões".
+- Custos medidos e a decisão de tirar os elementos GStreamer (`videobalance`/`gamma`/`gaussianblur`) estão em `docs/reports/M7.md` — em resumo: o `gaussianblur` mínimo custava ~30% de um núcleo sozinho, e VA-API foi descartado por não existir em GPUs NVIDIA.
 - Futuro: se um aparelho expuser controles V4L2 reais (ou o quirk do `uvcvideo` for aceito), eles podem ser adicionados ao lado. Isso fica fora do escopo da v1.
 
 ### 6.12 Configuração e persistência
@@ -342,7 +340,7 @@ Um arquivo de configuração inválido não pode derrubar o app: ele é renomead
 | Thread | Quem | Regras |
 |---|---|---|
 | Principal (GTK) | Relm4, widgets | **Nunca** bloqueia: sem I/O de disco, sem encode, sem `sleep` |
-| Streaming GStreamer | callbacks do appsink | Só copia o frame e publica. Nada de UI aqui |
+| Streaming GStreamer | callbacks do appsink | Copia o frame, aplica o `AdjustPlan` (§6.11) e publica. Nada de UI aqui |
 | Gravador | thread dedicada | Consome o canal do FrameBus e alimenta o appsrc |
 | Trabalho | comandos assíncronos do Relm4 / `gio::spawn_blocking` | Encode de foto, miniaturas, empilhamento |
 | Botão | thread da fonte | Envia `ButtonEvent` para a UI pelo sender do Relm4 |

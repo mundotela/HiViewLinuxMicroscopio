@@ -240,8 +240,8 @@ tela.
 - **Restaurar padrões** desfaz tudo e volta a imagem ao normal.
 - Os ajustes ficam salvos **por aparelho** e voltam ao reconectar ou
   reabrir o app.
-- O controle de **nitidez** só aparece quando o sistema tem o
-  componente necessário instalado.
+- Os ajustes são feitos **por software**, dentro do próprio app, e
+  não dependem de nenhum componente extra do sistema.
 
 > O brilho dos **LEDs** do microscópio só muda pela roda do cabo. O
 > ajuste de brilho do app clareia ou escurece a imagem, mas não muda a
