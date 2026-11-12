@@ -24,6 +24,9 @@ pub struct MeasurePanel {
     /// "Ferramenta" combo (None/Régua/Ângulo/Círculo).
     tool_row: adw::ComboRow,
     tool_handler: glib::SignalHandlerId,
+    /// "Nova calibração…" row — its subtitle flags calibration mode
+    /// while the Calibrate tool is armed.
+    calibrate_row: adw::ActionRow,
     /// "Calibração ativa" combo (None + every stored profile).
     profile_row: adw::ComboRow,
     profile_model: gtk::StringList,
@@ -72,9 +75,13 @@ pub fn build(sink: &Rc<dyn Fn(Input)>) -> (adw::PreferencesGroup, MeasurePanel) 
     group.add(&calibrate_row);
 
     // — Active profile + management buttons in the row's suffix.
+    //   `use_subtitle` puts the title on the second line so the
+    //   dropdown gets the full row width — profile names must not
+    //   ellipsize to "Ne…" in the narrow panel.
     let profile_model = gtk::StringList::new(&[strings::CALIBRATION_NONE]);
     let profile_row = adw::ComboRow::new();
     profile_row.set_title(strings::CALIBRATION_ACTIVE_LABEL);
+    profile_row.set_use_subtitle(true);
     profile_row.set_model(Some(&profile_model));
     let profile_handler = profile_row.connect_selected_notify({
         let sink = sink.clone();
@@ -118,6 +125,7 @@ pub fn build(sink: &Rc<dyn Fn(Input)>) -> (adw::PreferencesGroup, MeasurePanel) 
         group: group.clone(),
         tool_row,
         tool_handler,
+        calibrate_row,
         profile_row,
         profile_model,
         profile_handler,
@@ -162,6 +170,16 @@ pub fn sync(
     panel.tool_row.block_signal(&panel.tool_handler);
     panel.tool_row.set_selected(tool_index);
     panel.tool_row.unblock_signal(&panel.tool_handler);
+
+    // While Calibrate is armed the tool combo reads "Nenhuma" — the
+    // calibrate row's subtitle makes the mode obvious instead.
+    if measure.armed_tool() == Some(MeasureTool::Calibrate) {
+        panel
+            .calibrate_row
+            .set_subtitle(strings::CALIBRATION_ARMED_HINT);
+    } else {
+        panel.calibrate_row.set_subtitle("");
+    }
 
     // Profile combo: rebuild only when the list/selection changed —
     // rebuilding every sync would steal the open popup's state.
@@ -302,6 +320,33 @@ pub(crate) mod tests {
             title.contains("mm") || title.contains("µm"),
             "title: {title}"
         );
+
+        // The profile combo lists the new profile and selects it —
+        // the "Criar perfil → combo stays Nenhuma" regression.
+        assert_eq!(panel.profile_model.n_items(), 2);
+        assert_eq!(panel.profile_model.string(1).as_deref(), Some("teste"));
+        assert_eq!(panel.profile_row.selected(), 1);
+        assert!(panel.rename_btn.is_sensitive());
+        assert!(panel.delete_btn.is_sensitive());
+
+        // Arming Calibrate keeps the tool combo on "Nenhuma" but the
+        // calibrate row's subtitle flags the armed mode.
+        let mut cal = MeasureSet::default();
+        cal.arm(Some(MeasureTool::Calibrate));
+        sync(&mut panel, &cal, &config2, &sink);
+        assert_eq!(panel.tool_row.selected(), 0);
+        assert_eq!(
+            panel.calibrate_row.subtitle().as_deref(),
+            Some(strings::CALIBRATION_ARMED_HINT)
+        );
+        cal.arm(Some(MeasureTool::Ruler));
+        sync(&mut panel, &cal, &config2, &sink);
+        assert_eq!(panel.calibrate_row.subtitle().as_deref(), Some(""));
+
+        // Re-sync the measured set so the delete/clear checks below
+        // still find their rows.
+        sync(&mut panel, &set, &config2, &sink);
+        assert_eq!(panel.list_rows.len(), 2);
 
         // Per-item delete and "Limpar" reach the model.
         row_delete_button(&panel.list_rows[0]).emit_clicked();

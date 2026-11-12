@@ -306,6 +306,10 @@ pub const CALIBRATION_ACTIVE_LABEL: &str = "Calibração ativa";
 /// First entry of the calibration combo: no profile, pixel results.
 pub const CALIBRATION_NONE: &str = "Nenhuma (pixels)";
 
+/// "Nova calibração…" subtitle while the Calibrate tool is armed —
+/// the tool combo shows "Nenhuma", so this flags the mode.
+pub const CALIBRATION_ARMED_HINT: &str = "Arraste uma linha sobre a distância conhecida.";
+
 /// Side panel button: rename the active calibration profile.
 pub const CALIBRATION_RENAME_LABEL: &str = "Renomear…";
 

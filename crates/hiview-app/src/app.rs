@@ -374,6 +374,9 @@ pub struct AppModel {
     measure: MeasureSet,
     /// The reference line awaiting the calibration wizard's answer.
     pending_calibration: Option<(Point, Point)>,
+    /// The tool armed before "Nova calibração…" — restored when the
+    /// reference line commits and the wizard opens (§6.9).
+    calibrate_restore: Option<MeasureTool>,
     /// The Medição panel widgets, built in `init` (list + dialogs are
     /// imperative — see `measure_ui.rs`).
     measure_panel: Option<MeasurePanel>,
@@ -926,6 +929,7 @@ impl SimpleComponent for AppModel {
             adjust_controls: Vec::new(),
             measure: MeasureSet::default(),
             pending_calibration: None,
+            calibrate_restore: None,
             measure_panel: None,
             measure_sink: Rc::new(|_| {}),
             bench_prefs: adw::PreferencesPage::new(),
@@ -1369,6 +1373,11 @@ impl SimpleComponent for AppModel {
             Input::StartCalibration => {
                 if self.bench_only() {
                     if self.state == CameraState::Streaming {
+                        // Remember the armed tool — the wizard restores
+                        // it once the reference line commits (§6.9).
+                        if self.measure.armed_tool() != Some(MeasureTool::Calibrate) {
+                            self.calibrate_restore = self.measure.armed_tool();
+                        }
                         self.arm_measure(Some(MeasureTool::Calibrate));
                     } else {
                         self.show_toast(adw::Toast::new(strings::MEASURE_NO_FRAME));
@@ -1546,7 +1555,10 @@ impl AppModel {
     /// middle button (§6.9). Arming also drops a pending wizard line.
     fn arm_measure(&mut self, tool: Option<MeasureTool>) {
         if tool != Some(MeasureTool::Calibrate) {
+            // An explicit tool choice discards a pending wizard line
+            // and the saved "restore" tool — the user moved on.
             self.pending_calibration = None;
+            self.calibrate_restore = None;
         }
         self.measure.arm(tool);
         self.viewport.set_measure_tool(tool);
@@ -1578,9 +1590,14 @@ impl AppModel {
         self.sync_measure_ui();
     }
 
-    /// The reference line was drawn: remember it and open the wizard,
-    /// then disarm — the next tool arming starts a fresh session.
+    /// The reference line was drawn: disarm the calibration tool —
+    /// restoring whatever tool was armed before (or none) — remember
+    /// the line, then open the wizard. The disarm MUST come first:
+    /// `arm_measure` clears `pending_calibration` when the next tool
+    /// isn't `Calibrate`.
     fn open_calibration_wizard(&mut self, a: Point, b: Point) {
+        let restore = self.calibrate_restore.take();
+        self.arm_measure(restore);
         self.pending_calibration = Some((a, b));
         let existing: Vec<String> = self
             .config
@@ -1596,7 +1613,6 @@ impl AppModel {
             strings::calibration_default_name(self.config.calibration.len() + 1),
             &self.measure_sink,
         );
-        self.arm_measure(None);
     }
 
     /// Grid spacing row title — the unit follows the calibration (§6.9).

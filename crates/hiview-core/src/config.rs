@@ -313,6 +313,43 @@ mod tests {
         }
     }
 
+    /// The wizard flow end-to-end at the domain level (§6.9): a
+    /// Calibrate drag commits a `CalibrationLine` — the line becomes
+    /// a profile that is upserted, persisted and active after reload.
+    /// Regression for the "Criar perfil creates nothing" report.
+    #[test]
+    fn wizard_create_persists_and_activates() {
+        use crate::measure::{MeasureGesture, MeasureSet, MeasureTool};
+
+        let mut set = MeasureSet::default();
+        set.arm(Some(MeasureTool::Calibrate));
+        let commit = set.gesture(MeasureGesture::DragStart(crate::view::Point::new(0.0, 0.0)));
+        assert!(matches!(commit, crate::measure::MeasureCommit::Nothing));
+        let commit = set.gesture(MeasureGesture::DragEnd(crate::view::Point::new(188.0, 0.0)));
+        let crate::measure::MeasureCommit::CalibrationLine { a, b } = commit else {
+            panic!("expected CalibrationLine");
+        };
+
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let path = dir.path().join("config.toml");
+        let mut config = AppConfig::default();
+        let profile = crate::measure::CalibrationProfile::from_line(a, b, 1.0, "Lâmina".into())
+            .unwrap_or_else(|| panic!("line is valid"));
+        config.upsert_profile(profile);
+        save_config(&config, &path).unwrap_or_else(|e| panic!("save: {e}"));
+
+        match load_config(&path) {
+            ConfigLoad::Loaded(loaded) => {
+                let active = loaded
+                    .active_profile()
+                    .unwrap_or_else(|| panic!("the new profile is active"));
+                assert_eq!(active.name, "Lâmina");
+                assert!((active.px_per_mm - 188.0).abs() < 1e-9);
+            }
+            _ => panic!("expected Loaded"),
+        }
+    }
+
     /// The same-name upsert edits in place (the combo never lists
     /// duplicates), and removing the active profile clears the pointer.
     #[test]

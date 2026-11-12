@@ -59,6 +59,35 @@ mod tests {
     }
 
     #[test]
+    fn the_same_image_segment_reads_identically_at_any_zoom() {
+        // Regression for the "Linha medida" units report: the SAME
+        // image-space segment must commit the same pixel length —
+        // and the same formatted result — whether the view is at
+        // fit, 1:1 or 400%. Widget coordinates are fed the way the
+        // viewport emits them: image point -> widget -> back through
+        // `widget_to_image`.
+        let frame = Size::new(640.0, 480.0);
+        let widget = Size::new(800.0, 600.0);
+        let (a, b) = (p(100.0, 200.0), p(400.0, 200.0));
+
+        let mut views = [
+            ViewTransform::fit(frame, widget),
+            ViewTransform::fit(frame, widget),
+            ViewTransform::fit(frame, widget),
+        ];
+        views[1].zoom_at(p(400.0, 300.0), 1.0, frame, widget); // ~1:1
+        views[2].zoom_at(p(400.0, 300.0), 4.0, frame, widget); // 400%
+
+        for view in &views {
+            let mut set = MeasureSet::default();
+            set.arm(Some(MeasureTool::Ruler));
+            click_image(&mut set, view, a);
+            click_image(&mut set, view, b);
+            assert!((line_length(&set) - 300.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
     fn angle_and_circle_on_the_rotated_frame() {
         // After a 90° rotation the displayed frame is 480×640 (§6.9);
         // measurements still read image coordinates of that frame.
