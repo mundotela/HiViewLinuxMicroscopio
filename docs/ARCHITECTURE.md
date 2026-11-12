@@ -313,9 +313,11 @@ A implementação mora em `hiview-core::image_adjust` (Rust puro, testável, sem
 | Contraste | mesma LUT (pivô no cinza médio) | 0 … 2,0 (padrão 1) |
 | Gama | mesma LUT (`x^(1/γ)`; γ>1 levanta médios) | 0,3 … 3,0 (padrão 1) |
 | Saturação | mistura com luma BT.601, aritmética inteira | 0 … 2,0 (padrão 1) |
-| Nitidez | unsharp mask 3×3, aritmética inteira, bordas replicadas | 0 … 100% contínuo (padrão 0) |
+| Nitidez | unsharp mask 3×3 **na luma** (o delta é somado a R, G e B — sem franjas coloridas), aritmética inteira, bordas replicadas | 0 … 100% contínuo (padrão 0) |
 
 - Brilho + contraste + gama fundem-se em **uma LUT** recalculada só quando um valor muda; a nitidez usa um anel de três linhas (estágio 1 computado na hora), num **único passe** por frame, sem cópia do quadro inteiro.
+- O passe usa **Rust seguro apenas**: laços planos sobre fatias (`chunks_exact`/`zip`) que o compilador auto-vetoriza — sem `unsafe`, sem intrínsecos SIMD, sem threads extras (o orçamento do §7 conta o tempo de *toda* thread).
+- **Codegen:** `.cargo/config.toml` fixa `target-cpu=x86-64-v2` (SSE4.2, qualquer x86-64 desde ~2008) — o orçamento só fecha quando o compilador pode usar lanes de 16 bits (`pmullw`/`pmovzx`); medido no M7: 1,29 ms → 0,93 ms por frame. Escopo restrito a `x86_64`, sem efeito em outras arquiteturas.
 - Cada estágio só roda quando o valor sai do padrão.
 - Valores salvos por dispositivo (chave = VID:PID) e reaplicados ao conectar. Botão "Restaurar padrões".
 - Custos medidos e a decisão de tirar os elementos GStreamer (`videobalance`/`gamma`/`gaussianblur`) estão em `docs/reports/M7.md` — em resumo: o `gaussianblur` mínimo custava ~30% de um núcleo sozinho, e VA-API foi descartado por não existir em GPUs NVIDIA.
@@ -345,7 +347,7 @@ Um arquivo de configuração inválido não pode derrubar o app: ele é renomead
 | Trabalho | comandos assíncronos do Relm4 / `gio::spawn_blocking` | Encode de foto, miniaturas, empilhamento |
 | Botão | thread da fonte | Envia `ButtonEvent` para a UI pelo sender do Relm4 |
 
-**Orçamento de CPU:** em **regime contínuo** (vídeo ao vivo a 30 fps, sem ações em andamento), o app inteiro deve ficar **abaixo de 25% de um núcleo** na máquina alvo, **medido em build release**, em qualquer nível de zoom e com qualquer combinação de ajustes. Linha de base em release, medida no M3: ~8%. (O M2 mediu ~14% em build debug; o `videoflip` custa ~4–5 pontos percentuais e foi aceito.) Picos **transitórios** durante ações do usuário (ex.: rajada de fotos, ~40% por ~2,5 s) são aceitos, desde que o vídeo se mantenha ≥ 29 fps e a UI não trave. Todo milestone que mexe no pipeline mede e reporta a CPU.
+**Orçamento de CPU:** "% de núcleo" depende do perfil de energia/governor, então o orçamento tem duas formas. (1) **Por frame**: o passe de ajustes de imagem (§6.11) deve custar, em benchmark release a 640×480 com os cinco controles ativos e nitidez 100%, **mediana ≤ 1,0 ms e p95 ≤ 2,0 ms** por frame na máquina alvo. (2) **Ao vivo**: com os cinco ajustes ativos, o app deve ficar a **no máximo +6 pontos percentuais** acima da linha de base M6 medida **na mesma sessão e mesmo perfil**. Em **regime contínuo** (30 fps, sem ações em andamento) o app inteiro segue abaixo de 25% de um núcleo com ajustes no padrão. **Gravação não entra no orçamento de regime** — é ação do usuário; o critério é ≥ 29 fps, 0 frames perdidos e UI responsiva. Picos **transitórios** (ex.: rajada de fotos, ~40% por ~2,5 s) são aceitos. Todo milestone que mexe no pipeline mede e reporta a CPU e o perfil de energia usado.
 
 **Filas de trabalho limitadas:** toda fila que guarda quadros (fotos, gravação, empilhamento) tem capacidade máxima. Quando cheia, o disparo é recusado com aviso ao usuário, e nunca acumula memória sem limite. Fotos: no máximo 16 pendentes.
 
