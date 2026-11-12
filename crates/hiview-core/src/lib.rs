@@ -6,6 +6,7 @@
 //!
 //! This crate must not depend on GTK or GStreamer (docs/ARCHITECTURE.md §5).
 
+mod adjust;
 mod config;
 mod devices;
 mod error;
@@ -15,6 +16,10 @@ mod orientation;
 mod overlay;
 mod view;
 
+pub use adjust::{
+    AdjustKind, BRIGHTNESS_RANGE, CONTRAST_RANGE, GAMMA_RANGE, ImageAdjust, SATURATION_RANGE,
+    SHARPEN_MAX_SIGMA, SHARPEN_RANGE, digits_of, range_of, step_of,
+};
 pub use config::{AppConfig, ConfigLoad, PhotoConfig, config_path, load_config, save_config};
 pub use devices::{KNOWN_MICROSCOPES, KnownMicroscope, is_known_microscope};
 pub use error::{Error, Result};
