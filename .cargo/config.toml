@@ -1,0 +1,8 @@
+# M7 (ARCHITECTURE §6.11): the single-pass image adjust stays under the
+# §7 CPU budget (≤1.0 ms/frame @640×480) only when the compiler can use
+# SSE4.1+ for the widened u8→i16 arithmetic. `x86-64-v2` (SSE4.2 +
+# POPCNT, any x86-64 CPU since ~2008) is the conservative floor;
+# measured: 1.29 ms → 0.93 ms. Scoped to x86_64 so ARM builds are
+# unaffected.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v2"]
