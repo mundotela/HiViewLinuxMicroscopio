@@ -9,6 +9,7 @@
 mod app;
 mod cli;
 mod components;
+mod focus;
 mod overlay;
 mod services;
 mod strings;
@@ -46,4 +47,22 @@ fn main() {
     // so only the program name is forwarded.
     app.with_args(std::env::args().take(1).collect())
         .run::<app::AppModel>(args);
+}
+
+#[cfg(test)]
+mod tests {
+    /// GTK can only be initialized on ONE thread for the whole process
+    /// (`gtk4::rt` panics on a second calling thread), but the Rust test
+    /// harness runs every `#[test]` on its own thread — so every check
+    /// that touches GTK lives in a `check()` helper and runs here, on
+    /// this single test's thread.
+    #[test]
+    fn gtk_ui_contracts() {
+        if relm4::gtk::init().is_err() {
+            // No display in the test environment (CI/headless).
+            return;
+        }
+        crate::focus::tests::check();
+        crate::widgets::viewport::tests::check();
+    }
 }

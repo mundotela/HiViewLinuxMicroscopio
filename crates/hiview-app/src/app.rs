@@ -483,6 +483,7 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
                                         },
+
                                     },
                                 },
 
@@ -724,9 +725,14 @@ impl SimpleComponent for AppModel {
             }
         });
 
+        // The gallery launches before `view_output!` builds the
+        // viewport, so it receives a cell the app fills afterwards —
+        // its context popover returns keyboard focus to it (§7).
+        let gallery_focus: crate::focus::Slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let gallery = GalleryModel::builder()
             .launch(GalleryInit {
                 window: root.clone(),
+                focus_slot: gallery_focus.clone(),
             })
             .forward(sender.input_sender(), |out| match out {
                 GalleryOutput::Toast(text) => Input::GalleryToast(text),
@@ -788,6 +794,9 @@ impl SimpleComponent for AppModel {
 
         let widgets = view_output!();
         model.grab_widgets(&widgets);
+        // The gallery popover joins the shared focus-return contract
+        // now that the real viewport exists (§7).
+        *gallery_focus.borrow_mut() = Some(widgets.viewport.clone().upcast());
         model.nav_view = widgets.nav_view.clone();
         model.nav_view.connect_popped({
             let sender = sender.clone();
@@ -1696,58 +1705,27 @@ impl AppModel {
         });
     }
 
-    /// Keeps single-key accelerators alive by returning keyboard focus
-    /// to the viewport whenever it escaped into an editable widget —
-    /// while a SpinButton/entry holds focus, GTK routes bare letters
-    /// into it and `G`, `C`, `M`, `Space`… silently stop working.
+    /// Wires the shared focus-return helper (crate::focus): the window
+    /// watchers, and a `closed` hook on every dialog/popover the app
+    /// owns so single-key accelerators never stay dead (CONVENTIONS §7).
     fn install_focus_return(&self) {
-        fn is_editing(w: &gtk::Widget) -> bool {
-            w.is::<gtk::Editable>() || w.is::<gtk::TextView>()
-        }
-        // Enter inside an editable commits (bubble phase runs after the
-        // widget's own handling) and returns focus to the viewport.
-        let key = gtk::EventControllerKey::new();
-        key.connect_key_pressed({
+        crate::focus::install(
+            &self.window,
+            &self.viewport,
+            self.bench_sidebar.upcast_ref(),
+        );
+        // The camera-menu popover is created lazily by the MenuButton.
+        if let Some(popover) = self.menu_button.popover() {
+            crate::focus::watch_popover(&popover, &self.viewport);
+        } else {
             let viewport = self.viewport.clone();
-            let window = self.window.clone();
-            move |_, key, _, _| {
-                if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
-                    let editing = GtkWindowExt::focus(&window).is_some_and(|f| is_editing(&f));
-                    if editing {
-                        viewport.grab_focus();
+            self.menu_button
+                .connect_notify_local(Some("popover"), move |button, _| {
+                    if let Some(popover) = button.popover() {
+                        crate::focus::watch_popover(&popover, &viewport);
                     }
-                }
-                glib::Propagation::Proceed
-            }
-        });
-        self.window.add_controller(key.clone());
-        // Focus inside an editable when the window reactivates (a
-        // dialog or the gallery closed) returns to the viewport.
-        self.window.connect_notify_local(Some("is-active"), {
-            let viewport = self.viewport.clone();
-            move |win, _| {
-                if !win.is_active() {
-                    return;
-                }
-                let stuck = GtkWindowExt::focus(win).is_some_and(|f| is_editing(&f));
-                if stuck {
-                    viewport.grab_focus();
-                }
-            }
-        });
-        // Pointer leaving the Bancada panel ends an edit session.
-        let motion = gtk::EventControllerMotion::new();
-        motion.connect_leave({
-            let viewport = self.viewport.clone();
-            let window = self.window.clone();
-            move |_| {
-                let stuck = GtkWindowExt::focus(&window).is_some_and(|f| is_editing(&f));
-                if stuck {
-                    viewport.grab_focus();
-                }
-            }
-        });
-        self.bench_sidebar.add_controller(motion);
+                });
+        }
     }
 
     /// Builds and presents the preferences dialog (Fotos page).
@@ -1828,12 +1806,7 @@ impl AppModel {
 
         page.add(&group);
         dialog.add(&page);
-        dialog.connect_closed({
-            let viewport = self.viewport.clone();
-            move |_| {
-                viewport.grab_focus();
-            }
-        });
+        crate::focus::watch_dialog(dialog.upcast_ref::<adw::Dialog>(), &self.viewport);
         dialog.present(Some(&self.window));
     }
 }
