@@ -184,7 +184,7 @@ mod tests {
         state.crosshair.enabled = true;
         state.crosshair.style = CrosshairStyle::Ticks;
         state.crosshair.color = OverlayColor::WHITE;
-        state.crosshair.tick_spacing_px = 64.0;
+        state.crosshair.tick_spacing = GridSpacing::Pixels(64.0);
         let out = burn_in(black_image(640, 480), Size::new(640.0, 480.0), &state);
         // Cross center.
         assert!(out.get_pixel(320, 240).0[0] > 200);
