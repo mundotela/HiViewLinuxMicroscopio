@@ -705,8 +705,10 @@ impl SimpleComponent for AppModel {
         }
 
         let on_event: Arc<dyn Fn(CameraEvent) + Send + Sync> = {
-            let sender = sender.clone();
-            Arc::new(move |event| sender.input(Input::Camera(event)))
+            let input = sender.input_sender().clone();
+            Arc::new(move |event| {
+                let _ = input.send(Input::Camera(event));
+            })
         };
 
         let cfg_path = config_path();
@@ -716,8 +718,10 @@ impl SimpleComponent for AppModel {
         let config_mode = config.mode;
 
         let photos = PhotoService::new({
-            let sender = sender.clone();
-            move |outcome| sender.input(Input::PhotoDone(outcome))
+            let input = sender.input_sender().clone();
+            move |outcome| {
+                let _ = input.send(Input::PhotoDone(outcome));
+            }
         });
 
         let gallery = GalleryModel::builder()
@@ -730,8 +734,10 @@ impl SimpleComponent for AppModel {
 
         let camera = CameraService::new(&init.source, on_event);
         camera.frame_bus().set_ui_notify(Box::new({
-            let sender = sender.clone();
-            move || sender.input(Input::FrameReady)
+            let input = sender.input_sender().clone();
+            move || {
+                let _ = input.send(Input::FrameReady);
+            }
         }));
 
         let mut model = Self {
