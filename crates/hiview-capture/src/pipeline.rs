@@ -7,13 +7,13 @@
 //! in production code.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use gst::prelude::*;
 use tracing::{debug, warn};
 
-use hiview_core::{ImageAdjust, Orientation};
+use hiview_core::{AdjustPlan, ImageAdjust, Orientation};
 
 use crate::device::CameraDescriptor;
 use crate::error::Error;
@@ -39,6 +39,10 @@ pub enum CaptureSource {
     File(PathBuf),
 }
 
+/// Compiled image-adjustment plan shared with the appsink callback:
+/// `None` at neutral defaults (zero-cost passthrough).
+type SharedAdjust = Arc<Mutex<Option<Arc<AdjustPlan>>>>;
+
 /// Owns a running GStreamer pipeline delivering frames to a [`FrameBus`].
 ///
 /// `Drop` always transitions the pipeline to `Null` and stops the bus thread.
@@ -48,6 +52,7 @@ pub struct CapturePipeline {
     source: CaptureSource,
     dev_node: Option<PathBuf>,
     flip: Option<gst::Element>,
+    adjust: SharedAdjust,
     bus_thread: Option<JoinHandle<()>>,
 }
 
@@ -66,7 +71,8 @@ impl CapturePipeline {
         F: Fn(CameraEvent) + Send + Sync + 'static,
     {
         crate::init()?;
-        let pipeline = build_pipeline(&source, &frame_bus)?;
+        let adjust: SharedAdjust = Arc::new(Mutex::new(None));
+        let pipeline = build_pipeline(&source, &frame_bus, adjust.clone())?;
         let loop_playback = matches!(source, CaptureSource::File(_));
         let bus_thread = spawn_bus_thread(&pipeline, loop_playback, Arc::new(on_event))?;
 
@@ -79,6 +85,7 @@ impl CapturePipeline {
                 _ => None,
             },
             flip: pipeline.by_name("flip"),
+            adjust,
             pipeline,
             frame_bus,
             source,
@@ -127,9 +134,14 @@ impl CapturePipeline {
     }
 
     /// Applies the software image adjustments live (docs/ARCHITECTURE.md
-    /// §6.11). Inert until `hiview_core::image_adjust` is wired to the
-    /// appsink callback; kept on the API so callers stay unchanged.
-    pub fn set_adjust(&self, _adjust: &ImageAdjust) {}
+    /// §6.11): swaps the [`AdjustPlan`] the appsink callback applies to
+    /// each frame before publishing — the pipeline keeps playing, so
+    /// screen, photo and video all show them. At neutral defaults the
+    /// plan is `None` and frames pass through at zero cost.
+    pub fn set_adjust(&self, adjust: &ImageAdjust) {
+        let plan = AdjustPlan::compile(adjust).map(Arc::new);
+        *self.adjust.lock().unwrap_or_else(|e| e.into_inner()) = plan;
+    }
 }
 
 impl Drop for CapturePipeline {
@@ -175,7 +187,14 @@ const DEVICE_WARMUP_FRAMES: u64 = 3;
 /// playback speed instead of max CPU.
 ///
 /// `skip_first` discards that many initial samples (device warmup frames).
-fn build_appsink(frame_bus: &FrameBus, sync: bool, skip_first: u64) -> gst_app::AppSink {
+/// `adjust` is the software image-adjustment plan applied to every frame
+/// before it reaches the `FrameBus` (§6.11).
+fn build_appsink(
+    frame_bus: &FrameBus,
+    sync: bool,
+    skip_first: u64,
+    adjust: SharedAdjust,
+) -> gst_app::AppSink {
     let rgba = gst::Caps::builder("video/x-raw")
         .field("format", "RGBA")
         .build();
@@ -200,7 +219,7 @@ fn build_appsink(frame_bus: &FrameBus, sync: bool, skip_first: u64) -> gst_app::
                     let _ = sink.pull_sample();
                     return Ok(gst::FlowSuccess::Ok);
                 }
-                match extract_frame(sink) {
+                match extract_frame(sink, &adjust) {
                     Ok(Some(frame)) => {
                         bus.publish(frame);
                         Ok(gst::FlowSuccess::Ok)
@@ -217,7 +236,7 @@ fn build_appsink(frame_bus: &FrameBus, sync: bool, skip_first: u64) -> gst_app::
     appsink
 }
 
-fn extract_frame(sink: &gst_app::AppSink) -> Result<Option<Frame>, String> {
+fn extract_frame(sink: &gst_app::AppSink, adjust: &SharedAdjust) -> Result<Option<Frame>, String> {
     let sample = match sink.pull_sample() {
         Ok(sample) => sample,
         // EOS/flushing during shutdown or seeks is not a failure.
@@ -240,7 +259,18 @@ fn extract_frame(sink: &gst_app::AppSink) -> Result<Option<Frame>, String> {
     let height = info.height();
     let stride = usize::try_from(info.stride()[0]).unwrap_or(0);
 
-    let pixels = data.to_vec();
+    // The buffer is copied into an owned Vec either way; the adjustment
+    // plan runs on it in place before publishing, at zero extra copies.
+    // A `None` plan (all defaults) skips the pass entirely (§6.11).
+    let mut pixels = data.to_vec();
+    if let Some(plan) = adjust.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        plan.apply(
+            &mut pixels,
+            usize::try_from(width).unwrap_or(0),
+            usize::try_from(height).unwrap_or(0),
+            stride,
+        );
+    }
 
     Ok(Some(Frame {
         width,
@@ -259,30 +289,36 @@ fn extract_frame(sink: &gst_app::AppSink) -> Result<Option<Frame>, String> {
 /// videoconvert ! videoflip ! appsink
 /// ```
 ///
-/// Image adjustments are not GStreamer elements: they run on the copied
-/// RGBA buffer inside the appsink callback (§6.11). `videoflip` stays
-/// last in the chain so `set_orientation` can swap `video-direction`
-/// live (§6.4).
+/// Image adjustments are not GStreamer elements: the `AdjustPlan`
+/// shared with `extract_frame` runs on the copied RGBA buffer inside
+/// the appsink callback (§6.11), so screen, photo and video all see the
+/// same adjusted pixels. `videoflip` stays last in the chain so
+/// `set_orientation` can swap `video-direction` live (§6.4).
 fn build_tail(
     frame_bus: &FrameBus,
     sync: bool,
     skip_first: u64,
+    adjust: SharedAdjust,
 ) -> Result<Vec<gst::Element>, Error> {
-    let appsink = build_appsink(frame_bus, sync, skip_first).upcast::<gst::Element>();
+    let appsink = build_appsink(frame_bus, sync, skip_first, adjust).upcast::<gst::Element>();
     let convert = make("videoconvert")?;
     let flip = make("videoflip")?;
     flip.set_property("name", "flip");
     Ok(vec![convert, flip, appsink])
 }
 
-fn build_pipeline(source: &CaptureSource, frame_bus: &FrameBus) -> Result<gst::Pipeline, Error> {
+fn build_pipeline(
+    source: &CaptureSource,
+    frame_bus: &FrameBus,
+    adjust: SharedAdjust,
+) -> Result<gst::Pipeline, Error> {
     let pipeline = gst::Pipeline::builder().name("hiview-capture").build();
     let sync = matches!(source, CaptureSource::File(_));
     let skip_first = match source {
         CaptureSource::Device(_) => DEVICE_WARMUP_FRAMES,
         _ => 0,
     };
-    let tail = build_tail(frame_bus, sync, skip_first)?;
+    let tail = build_tail(frame_bus, sync, skip_first, adjust)?;
     let tail_head = tail[0].clone();
     pipeline.add_many(&tail)?;
 
