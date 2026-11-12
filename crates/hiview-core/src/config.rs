@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::imaging::{PhotoFormat, PhotoResolution};
+use crate::overlay::{AppMode, OverlayState};
 
 /// Top-level application configuration (§6.12).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -21,6 +22,10 @@ use crate::imaging::{PhotoFormat, PhotoResolution};
 pub struct AppConfig {
     /// Photo preferences.
     pub photo: PhotoConfig,
+    /// Explorar/Bancada mode (`M` toggles it).
+    pub mode: AppMode,
+    /// Grid and crosshair overlay settings (§6.9).
+    pub overlays: OverlayState,
 }
 
 /// Photo preferences shown in the "Fotos" preferences page.
@@ -34,6 +39,8 @@ pub struct PhotoConfig {
     /// Custom save folder. `None` uses the localized
     /// `Pictures/HiView` default resolved by the app layer.
     pub folder: Option<PathBuf>,
+    /// Burn the grid/crosshair overlays into the saved photo (§6.6).
+    pub burn_overlays: bool,
 }
 
 /// Result of [`load_config`].
@@ -121,6 +128,16 @@ mod tests {
         config.photo.format = PhotoFormat::Jpeg;
         config.photo.resolution = PhotoResolution::X2p5;
         config.photo.folder = Some(PathBuf::from("/tmp/minhas-fotos"));
+        config.photo.burn_overlays = true;
+        config.mode = crate::overlay::AppMode::Bench;
+        config.overlays.grid.enabled = true;
+        config.overlays.grid.spacing = crate::overlay::GridSpacing::Pixels(55.0);
+        config.overlays.grid.color = crate::overlay::OverlayColor::CYAN;
+        config.overlays.grid.opacity = 0.42;
+        config.overlays.crosshair.enabled = true;
+        config.overlays.crosshair.style = crate::overlay::CrosshairStyle::Ticks;
+        config.overlays.crosshair.color = crate::overlay::OverlayColor::WHITE;
+        config.overlays.crosshair.tick_spacing_px = 7.5;
         save_config(&config, &path).unwrap_or_else(|e| panic!("save: {e}"));
         match load_config(&path) {
             ConfigLoad::Loaded(loaded) => assert_eq!(loaded, config),
