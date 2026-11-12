@@ -54,6 +54,7 @@ pub fn build(sink: &Rc<dyn Fn(Input)>) -> (adw::PreferencesGroup, MeasurePanel) 
     //   matches every other row in the panel.
     let tool_row = adw::ComboRow::new();
     tool_row.set_title(strings::MEASURE_TOOL_LABEL);
+    swallow_scroll(&tool_row);
     tool_row.set_model(Some(&gtk::StringList::new(&strings::TOOL_NAMES)));
     let tool_handler = tool_row.connect_selected_notify({
         let sink = sink.clone();
@@ -82,6 +83,7 @@ pub fn build(sink: &Rc<dyn Fn(Input)>) -> (adw::PreferencesGroup, MeasurePanel) 
     let profile_row = adw::ComboRow::new();
     profile_row.set_title(strings::CALIBRATION_ACTIVE_LABEL);
     profile_row.set_use_subtitle(true);
+    swallow_scroll(&profile_row);
     profile_row.set_model(Some(&profile_model));
     let profile_handler = profile_row.connect_selected_notify({
         let sink = sink.clone();
@@ -136,6 +138,18 @@ pub fn build(sink: &Rc<dyn Fn(Input)>) -> (adw::PreferencesGroup, MeasurePanel) 
         clear_row,
     };
     (group, panel)
+}
+
+/// GtkDropDown (inside `adw::ComboRow`) cycles `selected` on the
+/// mouse wheel — scrolling the side panel over a combo would silently
+/// re-arm tools or clear the active calibration (the "profile lost
+/// after restart" regression). A capture-phase scroll controller on
+/// the row claims the wheel before the dropdown sees it.
+pub(crate) fn swallow_scroll(row: &adw::ComboRow) {
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+    scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+    scroll.connect_scroll(|_, _, _| glib::Propagation::Stop);
+    row.add_controller(scroll);
 }
 
 /// A flat icon button for the profile-row suffix.

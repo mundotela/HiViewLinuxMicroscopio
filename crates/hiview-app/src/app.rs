@@ -19,7 +19,7 @@ use hiview_core::{
     OverlayState, PhotoFormat, PhotoResolution, Point, ViewOrientation, config_path, digits_of,
     load_config, overlays_for, range_of, save_config, step_of,
 };
-use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
+use relm4::actions::{RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
 use relm4::gtk::{self, gio, glib};
 use relm4::{
@@ -145,6 +145,54 @@ relm4::new_stateless_action!(ToggleCrossAction, WindowActionGroup, "toggle-cross
 relm4::new_stateless_action!(MeasureRulerAction, WindowActionGroup, "measure-ruler");
 relm4::new_stateless_action!(MeasureAngleAction, WindowActionGroup, "measure-angle");
 relm4::new_stateless_action!(MeasureCircleAction, WindowActionGroup, "measure-circle");
+
+/// Keymap for the `win.*` actions (CONVENTIONS §13) — the single
+/// source of truth used by the window's capture-phase key controller.
+/// Returns the full action name (e.g. `"win.toggle-grid"`); `None`
+/// means the key is not a shortcut and must propagate. `Ctrl`
+/// shortcuts are matched first so `Ctrl+G` opens the gallery rather
+/// than toggling the grid; other modifiers (`Alt`, `Super`) make a
+/// key not-a-shortcut.
+fn shortcut_action(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> Option<&'static str> {
+    use gtk::gdk::Key;
+    if state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+        return match key.to_lower() {
+            k if k == Key::comma => Some("win.preferences"),
+            k if k == Key::g => Some("win.gallery"),
+            _ => None,
+        };
+    }
+    if state.intersects(
+        gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::SUPER_MASK
+            | gtk::gdk::ModifierType::HYPER_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    ) {
+        return None;
+    }
+    match key.to_lower() {
+        k if k == Key::plus || k == Key::equal || k == Key::KP_Add => Some("win.zoom-in"),
+        k if k == Key::minus || k == Key::KP_Subtract => Some("win.zoom-out"),
+        k if k == Key::_0 || k == Key::KP_0 => Some("win.fit-view"),
+        k if k == Key::_1 || k == Key::KP_1 => Some("win.zoom-100"),
+        k if k == Key::h => Some("win.mirror-h"),
+        k if k == Key::v => Some("win.mirror-v"),
+        k if k == Key::bracketleft => Some("win.rotate-ccw"),
+        k if k == Key::bracketright => Some("win.rotate-cw"),
+        k if k == Key::f => Some("win.freeze"),
+        k if k == Key::F11 => Some("win.fullscreen"),
+        k if k == Key::Escape => Some("win.escape"),
+        k if k == Key::space => Some("win.take-photo"),
+        k if k == Key::r => Some("win.record"),
+        k if k == Key::m => Some("win.toggle-mode"),
+        k if k == Key::g => Some("win.toggle-grid"),
+        k if k == Key::c => Some("win.toggle-crosshair"),
+        k if k == Key::l => Some("win.measure-ruler"),
+        k if k == Key::a => Some("win.measure-angle"),
+        k if k == Key::o => Some("win.measure-circle"),
+        _ => None,
+    }
+}
 
 /// Which capture the floating shutter button performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,6 +562,7 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "grid_color_row"]
                                             adw::ComboRow {
                                                 set_title: strings::GRID_COLOR_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::COLOR_NAMES)),
@@ -551,6 +600,7 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "cross_style_row"]
                                             adw::ComboRow {
                                                 set_title: strings::CROSS_STYLE_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::STYLE_NAMES)),
@@ -561,6 +611,7 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "cross_color_row"]
                                             adw::ComboRow {
                                                 set_title: strings::CROSS_COLOR_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::COLOR_NAMES)),
@@ -938,6 +989,11 @@ impl SimpleComponent for AppModel {
         model.sync_menu();
 
         let widgets = view_output!();
+        // Every `adw::ComboRow` must not scroll-cycle — see
+        // `measure_ui::swallow_scroll` (the "profile lost" regression).
+        crate::measure_ui::swallow_scroll(&widgets.grid_color_row);
+        crate::measure_ui::swallow_scroll(&widgets.cross_style_row);
+        crate::measure_ui::swallow_scroll(&widgets.cross_color_row);
         model.grab_widgets(&widgets);
         // The gallery popover joins the shared focus-return contract
         // now that the real viewport exists (§7).
@@ -1033,7 +1089,7 @@ impl SimpleComponent for AppModel {
                 glib::Propagation::Stop
             }
         });
-        group.register_for_widget(root);
+        group.register_for_widget(root.clone());
 
         // Ctrl+C and logout send SIGINT/SIGTERM; both run the same
         // finalize-then-quit path as the window close request. glib's
@@ -1054,29 +1110,30 @@ impl SimpleComponent for AppModel {
             Err(err) => tracing::warn!("cannot install signal handlers: {err}"),
         }
 
-        // Shortcuts for the M2 actions (docs/CONVENTIONS.md §13).
-        let app = relm4::main_adw_application();
-        app.set_accelerators_for_action::<ZoomInAction>(&["plus", "equal", "KP_Add"]);
-        app.set_accelerators_for_action::<ZoomOutAction>(&["minus", "KP_Subtract"]);
-        app.set_accelerators_for_action::<FitViewAction>(&["0", "KP_0"]);
-        app.set_accelerators_for_action::<Zoom100Action>(&["1", "KP_1"]);
-        app.set_accelerators_for_action::<MirrorHAction>(&["h", "H"]);
-        app.set_accelerators_for_action::<MirrorVAction>(&["v", "V"]);
-        app.set_accelerators_for_action::<RotateCcwAction>(&["bracketleft"]);
-        app.set_accelerators_for_action::<RotateCwAction>(&["bracketright"]);
-        app.set_accelerators_for_action::<FreezeAction>(&["f", "F"]);
-        app.set_accelerators_for_action::<FullscreenAction>(&["F11"]);
-        app.set_accelerators_for_action::<EscapeAction>(&["Escape"]);
-        app.set_accelerators_for_action::<TakePhotoAction>(&["space"]);
-        app.set_accelerators_for_action::<RecordAction>(&["r", "R"]);
-        app.set_accelerators_for_action::<PreferencesAction>(&["<Ctrl>comma"]);
-        app.set_accelerators_for_action::<GalleryAction>(&["<Ctrl>g"]);
-        app.set_accelerators_for_action::<ToggleModeAction>(&["m", "M"]);
-        app.set_accelerators_for_action::<ToggleGridAction>(&["g", "G"]);
-        app.set_accelerators_for_action::<ToggleCrossAction>(&["c", "C"]);
-        app.set_accelerators_for_action::<MeasureRulerAction>(&["l", "L"]);
-        app.set_accelerators_for_action::<MeasureAngleAction>(&["a", "A"]);
-        app.set_accelerators_for_action::<MeasureCircleAction>(&["o", "O"]);
+        // Shortcuts (docs/CONVENTIONS.md §13). NOT
+        // `set_accelerators_for_action`: app-level accelerators fire
+        // while a dialog is open and eat keystrokes destined for an
+        // Entry (M8 round-2 finding). A capture-phase key controller
+        // on the window runs `focus::shortcuts_allowed` first — never
+        // with a dialog up, never with a text input focused.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed({
+            let window = root.clone();
+            move |_, keyval, _keycode, state| {
+                if !crate::focus::shortcuts_allowed(&window) {
+                    return glib::Propagation::Proceed;
+                }
+                match shortcut_action(keyval, state) {
+                    Some(name) => {
+                        let _ = gtk::prelude::WidgetExt::activate_action(&window, name, None);
+                        glib::Propagation::Stop
+                    }
+                    None => glib::Propagation::Proceed,
+                }
+            }
+        });
+        root.add_controller(keys);
 
         ComponentParts { model, widgets }
     }
@@ -1395,6 +1452,13 @@ impl SimpleComponent for AppModel {
                 }
             }
             Input::SelectCalibration(index) => {
+                // Ignore out-of-range selections — GTK can notify with
+                // `INVALID_LIST_POSITION` (u32::MAX) while the combo's
+                // model splices; treating it as "Nenhuma" would wipe
+                // the active profile (M8 round-2 finding).
+                if index as usize > self.config.calibration.len() {
+                    return;
+                }
                 let old_ppm = self.active_px_per_mm();
                 let name = index
                     .checked_sub(1)
@@ -2433,6 +2497,7 @@ impl AppModel {
         group.set_title(strings::PREFS_PHOTOS_PAGE);
 
         let format_row = adw::ComboRow::new();
+        crate::measure_ui::swallow_scroll(&format_row);
         format_row.set_title(strings::PREFS_FORMAT_LABEL);
         format_row.set_model(Some(&gtk::StringList::new(&["PNG", "JPEG"])));
         format_row.set_selected(match self.config.photo.format {
@@ -2446,6 +2511,7 @@ impl AppModel {
         group.add(&format_row);
 
         let res_row = adw::ComboRow::new();
+        crate::measure_ui::swallow_scroll(&res_row);
         res_row.set_title(strings::PREFS_RESOLUTION_LABEL);
         res_row.set_model(Some(&gtk::StringList::new(&[
             strings::RES_NATIVE_LABEL,
@@ -2678,5 +2744,51 @@ pub(crate) mod tests {
                 .iter()
                 .any(|(k, v)| *k == AdjustKind::Brightness && (*v + 0.5).abs() < 1e-9)
         );
+
+        // The §13 keymap — every letter/digit the panel advertises must
+        // reach a win.* action, and `Ctrl` must not leak into the
+        // single-key table (`Ctrl+G` is the gallery, not the grid).
+        use gtk::gdk::{Key, ModifierType};
+        assert_eq!(
+            shortcut_action(Key::g, ModifierType::empty()),
+            Some("win.toggle-grid")
+        );
+        assert_eq!(
+            shortcut_action(Key::G, ModifierType::SHIFT_MASK),
+            Some("win.toggle-grid")
+        );
+        assert_eq!(
+            shortcut_action(Key::g, ModifierType::CONTROL_MASK),
+            Some("win.gallery")
+        );
+        assert_eq!(
+            shortcut_action(Key::l, ModifierType::empty()),
+            Some("win.measure-ruler")
+        );
+        assert_eq!(
+            shortcut_action(Key::a, ModifierType::empty()),
+            Some("win.measure-angle")
+        );
+        assert_eq!(
+            shortcut_action(Key::o, ModifierType::empty()),
+            Some("win.measure-circle")
+        );
+        assert_eq!(
+            shortcut_action(Key::space, ModifierType::empty()),
+            Some("win.take-photo")
+        );
+        assert_eq!(
+            shortcut_action(Key::Escape, ModifierType::empty()),
+            Some("win.escape")
+        );
+        assert_eq!(
+            shortcut_action(Key::comma, ModifierType::CONTROL_MASK),
+            Some("win.preferences")
+        );
+        // Not shortcuts: bare Ctrl+letter combos other than the two
+        // defined, Alt-modified keys, unbound letters.
+        assert_eq!(shortcut_action(Key::x, ModifierType::CONTROL_MASK), None);
+        assert_eq!(shortcut_action(Key::g, ModifierType::ALT_MASK), None);
+        assert_eq!(shortcut_action(Key::x, ModifierType::empty()), None);
     }
 }

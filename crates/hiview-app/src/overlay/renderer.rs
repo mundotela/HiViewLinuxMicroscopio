@@ -98,7 +98,7 @@ const MEASURE_LINE_PX: f64 = 2.0;
 /// Dot radius on measurement vertices, in device pixels.
 const MEASURE_DOT_PX: f64 = 3.0;
 /// Measurement label font size, in device pixels.
-const MEASURE_FONT_PX: f64 = 12.0;
+const MEASURE_FONT_PX: f64 = 15.0;
 /// Angle arc radius, in device pixels.
 const MEASURE_ARC_PX: f64 = 16.0;
 
@@ -343,9 +343,9 @@ fn draw_label(cr: &cairo::Context, text: &str, at: Point, color: (f64, f64, f64)
     let Ok(ext) = cr.text_extents(text) else {
         return;
     };
-    let pad = 3.0 * px;
+    let pad = 4.5 * px;
     // `at` is the chip's top-left; the text sits inside it.
-    cr.set_source_rgba(0.0, 0.0, 0.0, 0.6);
+    cr.set_source_rgba(0.0, 0.0, 0.0, 0.72);
     cr.rectangle(
         at.x,
         at.y,

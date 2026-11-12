@@ -37,6 +37,34 @@ fn is_editing(widget: &gtk::Widget) -> bool {
     widget.is::<gtk::Editable>() || widget.is::<gtk::TextView>() || widget.is::<gtk::Range>()
 }
 
+/// Whether `widget` or one of its ancestors is a text input — entries,
+/// spin buttons and text views. Single-key accelerators must NEVER
+/// fire while one of these holds focus: a typed "g" is text, not the
+/// grid shortcut (CONVENTIONS §7, M8 round-2 finding).
+pub(crate) fn in_text_input(widget: &gtk::Widget) -> bool {
+    let mut current = Some(widget.clone());
+    while let Some(w) = current {
+        if w.is::<gtk::Editable>() || w.is::<gtk::TextView>() {
+            return true;
+        }
+        current = w.parent();
+    }
+    false
+}
+
+/// The single-key shortcut gate (§13): bare letters and digits may
+/// only reach the `win.*` actions when the window itself owns the
+/// interaction — no `adw::Dialog` open, no text input focused.
+/// The application-level `set_accelerators_for_action` API cannot do
+/// this check, which is why shortcuts live in a window
+/// `EventControllerKey` instead.
+pub(crate) fn shortcuts_allowed(window: &adw::ApplicationWindow) -> bool {
+    if adw::prelude::AdwApplicationWindowExt::visible_dialog(window).is_some() {
+        return false;
+    }
+    GtkWindowExt::focus(window).is_none_or(|f| !in_text_input(&f))
+}
+
 /// Window-level focus returns, installed once at startup:
 ///
 /// - Enter inside an editable commits (bubble phase runs after the
@@ -141,6 +169,53 @@ pub(crate) mod tests {
         ));
         assert!(!is_editing(&gtk::Button::new().upcast::<gtk::Widget>()));
         assert!(!is_editing(&gtk::Label::new(None).upcast::<gtk::Widget>()));
+
+        // Text-input detection walks ancestors — the focused widget is
+        // the entry itself (EntryRow's inner text is still `Editable`).
+        assert!(in_text_input(&gtk::Entry::new().upcast::<gtk::Widget>()));
+        assert!(in_text_input(
+            &gtk::SpinButton::with_range(0.0, 10.0, 1.0).upcast::<gtk::Widget>()
+        ));
+        let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let entry = gtk::Entry::new();
+        box_.append(&entry);
+        assert!(in_text_input(&entry.upcast::<gtk::Widget>()));
+        assert!(!in_text_input(
+            &gtk::Label::new(None).upcast::<gtk::Widget>()
+        ));
+        assert!(!in_text_input(&gtk::Button::new().upcast::<gtk::Widget>()));
+
+        // The §13 gate: shortcuts are blocked while a text input holds
+        // focus inside a REALIZED window (the "typing the profile name
+        // fires G/C/M" regression) and allowed on plain widgets.
+        let window = adw::ApplicationWindow::new(&relm4::main_adw_application());
+        let box2 = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let entry2 = gtk::Entry::new();
+        let btn = gtk::Button::new();
+        box2.append(&entry2);
+        box2.append(&btn);
+        adw::prelude::AdwApplicationWindowExt::set_content(&window, Some(&box2));
+        window.present();
+        entry2.grab_focus();
+        assert!(
+            GtkWindowExt::focus(&window).is_some_and(|f| in_text_input(&f)),
+            "entry holds focus after grab_focus"
+        );
+        assert!(
+            !shortcuts_allowed(&window),
+            "shortcuts must be blocked while the entry is focused"
+        );
+        btn.grab_focus();
+        assert!(shortcuts_allowed(&window), "a plain widget allows them");
+        // A presented `adw::Dialog` blocks every window shortcut.
+        let dialog2 = adw::Dialog::new();
+        dialog2.present(Some(&window));
+        assert!(
+            !shortcuts_allowed(&window),
+            "a presented dialog blocks shortcuts"
+        );
+        dialog2.close();
+        window.close();
 
         let window = gtk::Window::new();
         let target = gtk::Button::new();

@@ -338,6 +338,17 @@ mod tests {
         config.upsert_profile(profile);
         save_config(&config, &path).unwrap_or_else(|e| panic!("save: {e}"));
 
+        // `active_calibration` must be a ROOT key — emitted before the
+        // `[[calibration]]` array, never nested inside a profile.
+        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read: {e}"));
+        let active_pos = text
+            .find("active_calibration")
+            .unwrap_or_else(|| panic!("active_calibration written: {text}"));
+        let table_pos = text
+            .find("[[calibration]]")
+            .unwrap_or_else(|| panic!("[[calibration]] written: {text}"));
+        assert!(active_pos < table_pos, "root key before the array: {text}");
+
         match load_config(&path) {
             ConfigLoad::Loaded(loaded) => {
                 let active = loaded
