@@ -267,7 +267,7 @@ mod tests {
         // Radius 50 px → the label shows 100 px of diameter.
         assert_eq!(
             shape.unwrap_or_else(|| panic!("shape")).label(None),
-            "⌀ 100 px"
+            "Ø 100 px"
         );
     }
 

@@ -95,8 +95,11 @@ impl WidgetImpl for Viewport {
             let bounds = graphene::Rect::new(0.0, 0.0, obj.width() as f32, obj.height() as f32);
             // The cairo node is appended when the context is dropped.
             let cr = snapshot.append_cairo(&bounds);
+            // Lines use `device_px` (crisp at any scale factor); labels
+            // use `1.0` — CSS px, the same physical size on every
+            // display — so HiDPI never shrinks the text.
             let device_px = 1.0 / f64::from(obj.scale_factor().max(1));
-            OverlayRenderer::draw(&cr, self.frame_size.get(), &t, &state, device_px);
+            OverlayRenderer::draw(&cr, self.frame_size.get(), &t, &state, device_px, 1.0);
         }
     }
 

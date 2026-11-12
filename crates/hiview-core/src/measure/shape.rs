@@ -58,7 +58,7 @@ impl MeasureShape {
             Self::Line { a, b } => format_length_px(distance(a, b), px_per_mm),
             Self::Circle { center, edge } => {
                 format!(
-                    "⌀ {}",
+                    "Ø {}",
                     format_length_px(2.0 * distance(center, edge), px_per_mm)
                 )
             }
@@ -157,6 +157,6 @@ mod tests {
             center: p(0.0, 0.0),
             edge: p(22.25, 0.0),
         };
-        assert_eq!(circle.label(Some(89.0)), "⌀ 500 µm ± 11");
+        assert_eq!(circle.label(Some(89.0)), "Ø 500 µm ± 11");
     }
 }

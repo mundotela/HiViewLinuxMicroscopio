@@ -130,6 +130,7 @@ pub fn open_calibration_dialog(
     let line_row = adw::ActionRow::new();
     line_row.set_title(&strings::calibration_line_label(line_px));
     let mm = adw::SpinRow::with_range(0.01, 1000.0, 0.1);
+    crate::measure_ui::swallow_scroll(&mm);
     mm.set_title(strings::CALIBRATION_REAL_LABEL);
     mm.set_digits(2);
     mm.set_value(1.0);

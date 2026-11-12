@@ -140,16 +140,41 @@ pub fn build(sink: &Rc<dyn Fn(Input)>) -> (adw::PreferencesGroup, MeasurePanel) 
     (group, panel)
 }
 
-/// GtkDropDown (inside `adw::ComboRow`) cycles `selected` on the
-/// mouse wheel — scrolling the side panel over a combo would silently
-/// re-arm tools or clear the active calibration (the "profile lost
-/// after restart" regression). A capture-phase scroll controller on
-/// the row claims the wheel before the dropdown sees it.
-pub(crate) fn swallow_scroll(row: &adw::ComboRow) {
-    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
+/// GTK controls eat the wheel — `GtkDropDown` cycles `selected`,
+/// `GtkRange` and `SpinButton` nudge their values — so scrolling the
+/// side panel over a control silently rewrote configuration (the
+/// "profile lost" regression). A capture-phase scroll controller on
+/// the control claims the wheel first and forwards the delta to the
+/// enclosing `ScrolledWindow` — the wheel only ever scrolls the
+/// panel, never changes a value.
+pub(crate) fn swallow_scroll<W: IsA<gtk::Widget>>(widget: &W) {
+    let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
     scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
-    scroll.connect_scroll(|_, _, _| glib::Propagation::Stop);
-    row.add_controller(scroll);
+    scroll.connect_scroll(|ctrl, dx, dy| {
+        if let Some(w) = ctrl.widget()
+            && let Some(ancestor) = w.ancestor(gtk::ScrolledWindow::static_type())
+            && let Ok(scrolled) = ancestor.downcast::<gtk::ScrolledWindow>()
+        {
+            nudge(&scrolled.vadjustment(), dy);
+            nudge(&scrolled.hadjustment(), dx);
+        }
+        glib::Propagation::Stop
+    });
+    widget.add_controller(scroll);
+}
+
+/// Pixels one wheel unit moves the panel — close to GtkScrolledWindow's
+/// own per-notch scroll for typical row heights.
+const SCROLL_STEP_PX: f64 = 60.0;
+
+/// Moves `adj` by `delta` wheel units, clamped to the scrollable range.
+fn nudge(adj: &gtk::Adjustment, delta: f64) {
+    if delta != 0.0 {
+        adj.set_value((adj.value() + delta * SCROLL_STEP_PX).clamp(
+            adj.lower(),
+            (adj.upper() - adj.page_size()).max(adj.lower()),
+        ));
+    }
 }
 
 /// A flat icon button for the profile-row suffix.
@@ -361,6 +386,33 @@ pub(crate) mod tests {
         // still find their rows.
         sync(&mut panel, &set, &config2, &sink);
         assert_eq!(panel.list_rows.len(), 2);
+
+        // Scroll guard: both combos carry the capture scroll
+        // controller (the wheel scrolls the panel, never `selected`).
+        for row in [&panel.tool_row, &panel.profile_row] {
+            let controllers = row.observe_controllers();
+            assert_eq!(
+                controllers
+                    .iter::<glib::Object>()
+                    .filter(|o| o
+                        .as_ref()
+                        .ok()
+                        .is_some_and(|c| c.is::<gtk::EventControllerScroll>()))
+                    .count(),
+                1,
+                "combo has exactly one scroll guard"
+            );
+        }
+
+        // The forwarded wheel delta moves the panel's adjustment and
+        // clamps at the scrollable bounds.
+        let adj = gtk::Adjustment::new(100.0, 0.0, 1000.0, 10.0, 50.0, 200.0);
+        nudge(&adj, 1.0);
+        assert!((adj.value() - 100.0 - SCROLL_STEP_PX).abs() < 1e-9);
+        nudge(&adj, -99.0);
+        assert_eq!(adj.value(), adj.lower());
+        nudge(&adj, 99.0);
+        assert_eq!(adj.value(), adj.upper() - adj.page_size());
 
         // Per-item delete and "Limpar" reach the model.
         row_delete_button(&panel.list_rows[0]).emit_clicked();

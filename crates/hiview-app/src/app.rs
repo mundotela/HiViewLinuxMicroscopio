@@ -573,6 +573,7 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "grid_opacity_row"]
                                             adw::SpinRow {
                                                 set_title: strings::GRID_OPACITY_LABEL,
                                                 set_adjustment: Some(&gtk::Adjustment::new(
@@ -989,11 +990,14 @@ impl SimpleComponent for AppModel {
         model.sync_menu();
 
         let widgets = view_output!();
-        // Every `adw::ComboRow` must not scroll-cycle — see
-        // `measure_ui::swallow_scroll` (the "profile lost" regression).
+        // No panel control may take the wheel — see
+        // `measure_ui::swallow_scroll` (the "profile lost" regression
+        // extended to every ComboRow/SpinRow by Henrique's rule).
         crate::measure_ui::swallow_scroll(&widgets.grid_color_row);
         crate::measure_ui::swallow_scroll(&widgets.cross_style_row);
         crate::measure_ui::swallow_scroll(&widgets.cross_color_row);
+        crate::measure_ui::swallow_scroll(&widgets.grid_spacing);
+        crate::measure_ui::swallow_scroll(&widgets.grid_opacity_row);
         model.grab_widgets(&widgets);
         // The gallery popover joins the shared focus-return contract
         // now that the real viewport exists (§7).
@@ -2309,6 +2313,8 @@ impl AppModel {
     fn adjust_row(kind: AdjustKind, sink: &Rc<dyn Fn(Input)>) -> (gtk::Widget, gtk::Scale) {
         let (min, max) = range_of(kind);
         let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step_of(kind));
+        // The wheel must scroll the panel, never the value (§13 rule).
+        crate::measure_ui::swallow_scroll(&scale);
         scale.set_value(ImageAdjust::default().get(kind));
         scale.set_draw_value(true);
         scale.set_value_pos(gtk::PositionType::Right);

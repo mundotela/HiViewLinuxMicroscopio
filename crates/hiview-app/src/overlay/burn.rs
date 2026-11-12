@@ -74,7 +74,10 @@ fn burn_bytes(
             offset: Point::new(0.0, 0.0),
             mode: ViewMode::Fixed,
         };
-        OverlayRenderer::draw(&cr, source, &view, state, 1.0);
+        // `px` stays 1.0 — one output pixel, crisp lines — while `em`
+        // scales labels proportionally to the output resolution (§6.9:
+        // "stay readable in 1600×1200").
+        OverlayRenderer::draw(&cr, source, &view, state, 1.0, view.scale);
     }
     surface.flush();
     {

@@ -18,11 +18,14 @@ use hiview_core::{
 
 /// Draws grid and crosshair overlays on a cairo context (§6.9).
 ///
-/// ARCHITECTURE.md sketches `draw(cr, view, state)`; two extra
+/// ARCHITECTURE.md sketches `draw(cr, view, state)`; three extra
 /// parameters are needed in practice: `frame`, the image size in image
-/// pixels (the transform does not know it), and `px`, the size of one
+/// pixels (the transform does not know it); `px`, the size of one
 /// device pixel in target units (`1/scale_factor` on screen, `1.0` on a
-/// photo), used to keep every line one pixel crisp.
+/// photo), used to keep every line one pixel crisp; and `em`, the
+/// label unit — `1.0` (CSS px) on screen so text never zooms and keeps
+/// its physical size on HiDPI, `view.scale` on a photo so burnt-in
+/// labels scale with the output resolution.
 pub struct OverlayRenderer;
 
 impl OverlayRenderer {
@@ -34,6 +37,7 @@ impl OverlayRenderer {
         view: &ViewTransform,
         state: &OverlayState,
         px: f64,
+        em: f64,
     ) {
         if px <= 0.0 {
             return;
@@ -58,7 +62,7 @@ impl OverlayRenderer {
                 px,
             );
         }
-        draw_measurements(cr, view, &state.measure, px);
+        draw_measurements(cr, view, &state.measure, px, em);
     }
 }
 
@@ -98,7 +102,7 @@ const MEASURE_LINE_PX: f64 = 2.0;
 /// Dot radius on measurement vertices, in device pixels.
 const MEASURE_DOT_PX: f64 = 3.0;
 /// Measurement label font size, in device pixels.
-const MEASURE_FONT_PX: f64 = 15.0;
+const MEASURE_FONT_PX: f64 = 19.0;
 /// Angle arc radius, in device pixels.
 const MEASURE_ARC_PX: f64 = 16.0;
 
@@ -206,26 +210,34 @@ fn draw_ticks(
 
 /// Committed measurements plus the in-progress draft (§6.9). All shapes
 /// arrive in image coordinates; `view` maps them to the target surface.
-fn draw_measurements(cr: &cairo::Context, view: &ViewTransform, layer: &MeasureOverlay, px: f64) {
+/// `em` scales labels only — geometry stays on `px` (device-crisp).
+fn draw_measurements(
+    cr: &cairo::Context,
+    view: &ViewTransform,
+    layer: &MeasureOverlay,
+    px: f64,
+    em: f64,
+) {
     for item in &layer.items {
         draw_shape(cr, view, &item.shape, MEASURE_COLOR, false, px);
         let label = item.shape.label(layer.px_per_mm);
         draw_label(
             cr,
             &label,
-            label_anchor(view, &item.shape),
+            label_anchor(view, &item.shape, em),
             MEASURE_COLOR,
-            px,
+            em,
         );
     }
     if let Some(draft) = &layer.draft {
-        draw_draft(cr, view, draft, layer.px_per_mm, px);
+        draw_draft(cr, view, draft, layer.px_per_mm, px, em);
     }
 }
 
 /// The widget-space anchor a shape's label attaches to: the line's
-/// midpoint, the angle's vertex, the circle's top edge.
-fn label_anchor(view: &ViewTransform, shape: &MeasureShape) -> Point {
+/// midpoint, the angle's vertex, the circle's top edge. Offsets are in
+/// `em` units so the chip keeps the same distance on photo burn-in.
+fn label_anchor(view: &ViewTransform, shape: &MeasureShape, em: f64) -> Point {
     let (anchor, dx, dy) = match *shape {
         MeasureShape::Line { a, b } => {
             (Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0), 6.0, -10.0)
@@ -237,7 +249,7 @@ fn label_anchor(view: &ViewTransform, shape: &MeasureShape) -> Point {
         }
     };
     let w = view.image_to_widget(anchor);
-    Point::new(w.x + dx, w.y + dy)
+    Point::new(w.x + dx * em, w.y + dy * em)
 }
 
 /// One measurement shape: outline + vertex dots, solid or dashed.
@@ -319,6 +331,7 @@ fn draw_draft(
     draft: &DraftView,
     px_per_mm: Option<f64>,
     px: f64,
+    em: f64,
 ) {
     let color = if draft.tool == MeasureTool::Calibrate {
         CALIBRATE_COLOR
@@ -332,18 +345,20 @@ fn draw_draft(
     if let Some(shape) = draft.preview_shape() {
         draw_shape(cr, view, &shape, color, true, px);
         let label = shape.label(px_per_mm);
-        draw_label(cr, &label, label_anchor(view, &shape), color, px);
+        draw_label(cr, &label, label_anchor(view, &shape, em), color, em);
     }
 }
 
 /// A measurement value on a dark chip, readable over any frame content.
-fn draw_label(cr: &cairo::Context, text: &str, at: Point, color: (f64, f64, f64), px: f64) {
+/// `em` is the label unit — device pixels on screen, output-scale on
+/// photo burn-in.
+fn draw_label(cr: &cairo::Context, text: &str, at: Point, color: (f64, f64, f64), em: f64) {
     cr.select_font_face("Sans", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
-    cr.set_font_size(MEASURE_FONT_PX * px);
+    cr.set_font_size(MEASURE_FONT_PX * em);
     let Ok(ext) = cr.text_extents(text) else {
         return;
     };
-    let pad = 4.5 * px;
+    let pad = 4.5 * em;
     // `at` is the chip's top-left; the text sits inside it.
     cr.set_source_rgba(0.0, 0.0, 0.0, 0.72);
     cr.rectangle(
@@ -392,7 +407,7 @@ mod tests {
         .unwrap_or_else(|e| panic!("surface: {e}"));
         {
             let cr = cairo::Context::new(&surface).unwrap_or_else(|e| panic!("context: {e}"));
-            OverlayRenderer::draw(&cr, frame, view, state, 1.0);
+            OverlayRenderer::draw(&cr, frame, view, state, 1.0, 1.0);
         }
         surface.flush();
         let data = surface.take_data().unwrap_or_else(|e| panic!("data: {e}"));
