@@ -24,8 +24,8 @@ pub use gallery::{
     read_duration_sidecar, scan_media, thumb_from_rgba, write_duration_sidecar, write_thumb_png,
 };
 pub use imaging::{
-    JPEG_QUALITY, PhotoFormat, PhotoResolution, encode_photo, photo_filename, rgba_image,
-    save_photo, unique_photo_path, video_filename,
+    JPEG_QUALITY, PhotoFormat, PhotoResolution, encode_image, encode_photo, photo_filename,
+    render_photo, rgba_image, save_photo, save_photo_with, unique_photo_path, video_filename,
 };
 pub use orientation::{Orientation, ViewOrientation};
 pub use overlay::{
