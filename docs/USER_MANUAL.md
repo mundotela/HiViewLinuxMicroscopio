@@ -92,7 +92,17 @@ Se aparecer **"Procurando microscópio…"**, veja a seção 12.
 └──────────────────────────────────────────────────────────┘
 ```
 
-No modo Bancada, um **painel lateral** mostra as ferramentas de medição, grade, mira e ajustes de imagem.
+O HiView tem dois modos, escolhidos no seletor do topo ou pela tecla `M`:
+
+- **Explorar** é o modo simples: a imagem ocupa tudo e não há painel
+  lateral nem sobreposições. É o modo padrão para uso casual.
+- **Bancada** é o modo de inspeção: abre um **painel lateral** com as
+  ferramentas de grade e mira (medição e ajustes de imagem chegam em
+  versões futuras). As sobreposições ligadas na Bancada voltam a
+  aparecer quando você retorna ao modo — mas só aparecem na Bancada.
+
+No modo Explorar, as teclas `G` e `C` mostram um aviso rápido de que
+essas ferramentas ficam no modo Bancada.
 
 ---
 
@@ -136,7 +146,7 @@ O que entra na foto:
 | Resolução | Nativa 640×480 · 1280×960 *(interpolada)* · 1600×1200 *(interpolada)* |
 | Pasta | Pasta onde as fotos são salvas (padrão: **Imagens/HiView**) |
 | Redução de ruído | Desligada · 4 · 8 · 16 quadros. Combina várias capturas numa foto mais limpa. **Mantenha o microscópio e o objeto parados** durante a captura (menos de 1 segundo) |
-| Gravar sobreposições | Inclui grade, mira e medidas na foto |
+| Gravar sobreposições | Inclui grade e mira na foto, iguais à tela |
 
 ---
 
@@ -197,18 +207,38 @@ Você pode mudar o tempo do clique longo em Preferências → Botão físico. L�
 
 ## 11. Modo Bancada (eletrônica)
 
+Ative pelo seletor do topo ou pela tecla `M`. O painel lateral mostra
+as ferramentas abaixo; todas as escolhas ficam salvas para a próxima
+vez que você abrir o programa.
+
 ### 11.1 Grade e mira
 
-- **Grade** (`G`): linhas de referência para alinhar componentes. Espaçamento em pixels ou em milímetros (se calibrado).
-- **Mira** (`C`): marca o centro da imagem. Estilos: cruz, cruz com círculo, cruz com escala.
+- **Grade** (`G`): linhas de referência para alinhar componentes.
+  No painel você ajusta o **espaçamento em pixels da imagem**, a **cor**
+  e a **opacidade**. As linhas acompanham zoom, arrasto, espelhamento e
+  rotação, e ficam sempre finas e nítidas, mesmo em 800%.
+- **Mira** (`C`): marca o centro da imagem. Estilos: **cruz**,
+  **cruz com círculo** e **cruz com escala** (traços a cada tantos
+  pixels). A cor também é configurável no painel.
+
+> O espaçamento da grade e da escala da mira hoje é em pixels da
+> imagem. Espaçamento em milímetros chega junto com a calibração.
+
+Grade e mira aparecem na tela e, se **Gravar sobreposições** estiver
+ligada em Preferências → Fotos, também saem nas fotos. Os vídeos nunca
+gravam sobreposições.
 
 ### 11.2 Ajustes de imagem
+
+> ⚠️ Planejado para uma versão futura — ainda não disponível.
 
 Brilho, contraste, saturação, gama e nitidez. Eles são aplicados pelo HiView na imagem, então aparecem também nas fotos e nos vídeos. **Restaurar padrões** desfaz tudo. Os ajustes ficam salvos para a próxima vez.
 
 > O brilho dos **LEDs** do microscópio só muda pela roda do cabo. O ajuste de brilho do app clareia ou escurece a imagem, mas não muda a luz. Para objetos que refletem muito, baixe primeiro os LEDs.
 
 ### 11.3 Medição
+
+> ⚠️ Planejado para uma versão futura — ainda não disponível.
 
 > ⚠️ **Antes de medir, calibre.** Sem calibração, as medidas saem em pixels.
 
@@ -257,9 +287,8 @@ Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 | `Espaço` | Tirar foto |
 | `R` | Iniciar/parar gravação |
 | `F` | Congelar/descongelar |
-| `G` | Grade |
-| `C` | Mira |
-| `L` | Régua |
+| `G` | Grade (modo Bancada) |
+| `C` | Mira (modo Bancada) |
 | `H` / `V` | Espelhar horizontal / vertical |
 | `[` / `]` | Girar −90° / +90° |
 | `+` / `-` | Zoom |

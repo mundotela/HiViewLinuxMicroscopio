@@ -12,7 +12,8 @@ use hiview_capture::{
     check_disk_space,
 };
 use hiview_core::{
-    AppConfig, PhotoFormat, PhotoResolution, ViewOrientation, config_path, load_config, save_config,
+    AppConfig, AppMode, CrosshairStyle, GridSpacing, OverlayColor, PhotoFormat, PhotoResolution,
+    ViewOrientation, config_path, load_config, overlays_for, save_config,
 };
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
@@ -133,6 +134,9 @@ relm4::new_stateless_action!(TakePhotoAction, WindowActionGroup, "take-photo");
 relm4::new_stateless_action!(RecordAction, WindowActionGroup, "record");
 relm4::new_stateless_action!(PreferencesAction, WindowActionGroup, "preferences");
 relm4::new_stateless_action!(GalleryAction, WindowActionGroup, "gallery");
+relm4::new_stateless_action!(ToggleModeAction, WindowActionGroup, "toggle-mode");
+relm4::new_stateless_action!(ToggleGridAction, WindowActionGroup, "toggle-grid");
+relm4::new_stateless_action!(ToggleCrossAction, WindowActionGroup, "toggle-crosshair");
 
 /// Which capture the floating shutter button performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -208,6 +212,30 @@ pub enum Input {
     GalleryClosed,
     /// The gallery asks for a toast on the shared overlay.
     GalleryToast(&'static str),
+    /// `M`: toggle Explorar/Bancada.
+    ToggleMode,
+    /// Either mode toggle in the header changed; read the active one.
+    ModeToggled,
+    /// `G`: toggle the grid (Bancada only).
+    ToggleGrid,
+    /// `C`: toggle the crosshair (Bancada only).
+    ToggleCrosshair,
+    /// Side panel grid switch.
+    SetGridEnabled(bool),
+    /// Side panel grid spacing, in image pixels.
+    SetGridSpacing(f64),
+    /// Side panel grid color (index into `OverlayColor::PRESETS`).
+    SetGridColor(u32),
+    /// Side panel grid opacity, `0.0..=1.0`.
+    SetGridOpacity(f64),
+    /// Side panel crosshair switch.
+    SetCrosshairEnabled(bool),
+    /// Side panel crosshair style (index into `CrosshairStyle` order).
+    SetCrosshairStyle(u32),
+    /// Side panel crosshair color (index into `OverlayColor::PRESETS`).
+    SetCrosshairColor(u32),
+    /// Preferences "Gravar sobreposições na foto" switch.
+    SetBurnOverlays(bool),
 }
 
 /// Root component of the application.
@@ -278,6 +306,13 @@ pub struct AppModel {
     gallery: Controller<GalleryModel>,
     /// Whether the gallery page is currently pushed.
     gallery_open: bool,
+    /// Explorar/Bancada mode (§1), persisted in `config.mode`.
+    mode: AppMode,
+    /// The Bancada toggle in the header; its `active` selects the mode.
+    mode_bench_btn: gtk::ToggleButton,
+    /// Split view that hosts the Bancada side panel (§6.9).
+    split_view: adw::OverlaySplitView,
+    bench_sidebar: adw::ToolbarView,
 }
 
 #[relm4::component(pub)]
@@ -304,6 +339,33 @@ impl SimpleComponent for AppModel {
                         #[wrap(Some)]
                         set_child = &adw::ToolbarView {
                             add_top_bar = &adw::HeaderBar {
+                                // adw::ToggleGroup is libadwaita 1.7+;
+                                // the system has 1.5, so two linked
+                                // toggle buttons do the same job.
+                                pack_start = &gtk::Box {
+                                    set_css_classes: &["linked"],
+
+                                    #[name = "mode_explore_btn"]
+                                    gtk::ToggleButton {
+                                        set_label: strings::MODE_EXPLORE_LABEL,
+                                        set_tooltip_text: Some(strings::MODE_TOGGLE_TOOLTIP),
+                                        set_focusable: false,
+                                        #[watch]
+                                        set_active: model.mode == AppMode::Explore,
+                                        connect_toggled => Input::ModeToggled,
+                                    },
+                                    #[name = "mode_bench_btn"]
+                                    gtk::ToggleButton {
+                                        set_label: strings::MODE_BENCH_LABEL,
+                                        set_tooltip_text: Some(strings::MODE_TOGGLE_TOOLTIP),
+                                        set_focusable: false,
+                                        set_group: Some(&mode_explore_btn),
+                                        #[watch]
+                                        set_active: model.mode == AppMode::Bench,
+                                        connect_toggled => Input::ModeToggled,
+                                    },
+                                },
+
                                 pack_end = &gtk::Button {
                                     set_label: strings::GALLERY_BUTTON_LABEL,
                                     set_tooltip_text: Some(strings::GALLERY_BUTTON_TOOLTIP),
@@ -318,9 +380,115 @@ impl SimpleComponent for AppModel {
                                 },
                             },
 
-                            #[name = "content_stack"]
+                            #[name = "split_view"]
                             #[wrap(Some)]
-                            set_content = &gtk::Stack {
+                            set_content = &adw::OverlaySplitView {
+                                #[watch]
+                                set_show_sidebar: model.mode == AppMode::Bench,
+
+                                #[name = "bench_sidebar"]
+                                #[wrap(Some)]
+                                set_sidebar = &adw::ToolbarView {
+                                    add_top_bar = &adw::HeaderBar {
+                                        #[wrap(Some)]
+                                        set_title_widget = &adw::WindowTitle {
+                                            set_title: strings::BENCH_PANEL_TITLE,
+                                        },
+                                    },
+
+                                    #[wrap(Some)]
+                                    set_content = &adw::PreferencesPage {
+                                        add = &adw::PreferencesGroup {
+                                            set_title: strings::GRID_GROUP_TITLE,
+
+                                            adw::SwitchRow {
+                                                set_title: strings::GRID_SHOW_LABEL,
+                                                #[watch]
+                                                set_active: model.config.overlays.grid.enabled,
+                                                connect_active_notify[sender] => move |row| {
+                                                    sender.input(Input::SetGridEnabled(row.is_active()));
+                                                },
+                                            },
+
+                                            adw::SpinRow {
+                                                set_title: strings::GRID_SPACING_LABEL,
+                                                set_adjustment: Some(&gtk::Adjustment::new(
+                                                    model.config.overlays.grid.spacing.pixels(None),
+                                                    hiview_core::MIN_GRID_SPACING_PX,
+                                                    hiview_core::MAX_GRID_SPACING_PX,
+                                                    5.0, 25.0, 0.0,
+                                                )),
+                                                set_digits: 0,
+                                                #[watch]
+                                                set_value: model.config.overlays.grid.spacing.pixels(None),
+                                                connect_value_notify[sender] => move |row| {
+                                                    sender.input(Input::SetGridSpacing(row.value()));
+                                                },
+                                            },
+
+                                            adw::ComboRow {
+                                                set_title: strings::GRID_COLOR_LABEL,
+                                                set_model: Some(&gtk::StringList::new(&strings::COLOR_NAMES)),
+                                                #[watch]
+                                                set_selected: model.config.overlays.grid.color.preset_index(),
+                                                connect_selected_notify[sender] => move |row| {
+                                                    sender.input(Input::SetGridColor(row.selected()));
+                                                },
+                                            },
+
+                                            adw::SpinRow {
+                                                set_title: strings::GRID_OPACITY_LABEL,
+                                                set_adjustment: Some(&gtk::Adjustment::new(
+                                                    model.config.overlays.grid.opacity * 100.0,
+                                                    10.0, 100.0, 5.0, 10.0, 0.0,
+                                                )),
+                                                set_digits: 0,
+                                                #[watch]
+                                                set_value: model.config.overlays.grid.opacity * 100.0,
+                                                connect_value_notify[sender] => move |row| {
+                                                    sender.input(Input::SetGridOpacity(row.value() / 100.0));
+                                                },
+                                            },
+                                        },
+
+                                        add = &adw::PreferencesGroup {
+                                            set_title: strings::CROSS_GROUP_TITLE,
+
+                                            adw::SwitchRow {
+                                                set_title: strings::CROSS_SHOW_LABEL,
+                                                #[watch]
+                                                set_active: model.config.overlays.crosshair.enabled,
+                                                connect_active_notify[sender] => move |row| {
+                                                    sender.input(Input::SetCrosshairEnabled(row.is_active()));
+                                                },
+                                            },
+
+                                            adw::ComboRow {
+                                                set_title: strings::CROSS_STYLE_LABEL,
+                                                set_model: Some(&gtk::StringList::new(&strings::STYLE_NAMES)),
+                                                #[watch]
+                                                set_selected: model.config.overlays.crosshair.style as u32,
+                                                connect_selected_notify[sender] => move |row| {
+                                                    sender.input(Input::SetCrosshairStyle(row.selected()));
+                                                },
+                                            },
+
+                                            adw::ComboRow {
+                                                set_title: strings::CROSS_COLOR_LABEL,
+                                                set_model: Some(&gtk::StringList::new(&strings::COLOR_NAMES)),
+                                                #[watch]
+                                                set_selected: model.config.overlays.crosshair.color.preset_index(),
+                                                connect_selected_notify[sender] => move |row| {
+                                                    sender.input(Input::SetCrosshairColor(row.selected()));
+                                                },
+                                            },
+                                        },
+                                    },
+                                },
+
+                                #[name = "content_stack"]
+                                #[wrap(Some)]
+                                set_content = &gtk::Stack {
 
                     #[name = "searching_page"]
                     add_child = &adw::StatusPage {
@@ -519,6 +687,7 @@ impl SimpleComponent for AppModel {
                 },
                 },
                 },
+                },
             },
         }
     }
@@ -536,18 +705,23 @@ impl SimpleComponent for AppModel {
         }
 
         let on_event: Arc<dyn Fn(CameraEvent) + Send + Sync> = {
-            let sender = sender.clone();
-            Arc::new(move |event| sender.input(Input::Camera(event)))
+            let input = sender.input_sender().clone();
+            Arc::new(move |event| {
+                let _ = input.send(Input::Camera(event));
+            })
         };
 
         let cfg_path = config_path();
         let config_outcome = load_config(&cfg_path);
         let config_recovered = config_outcome.was_recovered();
         let config = config_outcome.into_config();
+        let config_mode = config.mode;
 
         let photos = PhotoService::new({
-            let sender = sender.clone();
-            move |outcome| sender.input(Input::PhotoDone(outcome))
+            let input = sender.input_sender().clone();
+            move |outcome| {
+                let _ = input.send(Input::PhotoDone(outcome));
+            }
         });
 
         let gallery = GalleryModel::builder()
@@ -560,8 +734,10 @@ impl SimpleComponent for AppModel {
 
         let camera = CameraService::new(&init.source, on_event);
         camera.frame_bus().set_ui_notify(Box::new({
-            let sender = sender.clone();
-            move || sender.input(Input::FrameReady)
+            let input = sender.input_sender().clone();
+            move || {
+                let _ = input.send(Input::FrameReady);
+            }
         }));
 
         let mut model = Self {
@@ -603,6 +779,10 @@ impl SimpleComponent for AppModel {
             nav_view: adw::NavigationView::new(),
             gallery,
             gallery_open: false,
+            mode: config_mode,
+            mode_bench_btn: gtk::ToggleButton::new(),
+            split_view: adw::OverlaySplitView::new(),
+            bench_sidebar: adw::ToolbarView::new(),
         };
         model.sync_menu();
 
@@ -661,6 +841,9 @@ impl SimpleComponent for AppModel {
         view_action!(RecordAction, Input::ToggleRecord);
         view_action!(PreferencesAction, Input::OpenPreferences);
         view_action!(GalleryAction, Input::ToggleGallery);
+        view_action!(ToggleModeAction, Input::ToggleMode);
+        view_action!(ToggleGridAction, Input::ToggleGrid);
+        view_action!(ToggleCrossAction, Input::ToggleCrosshair);
 
         // The window must finalize a running recording (EOS sequence)
         // before it may close — see Input::CloseRequested.
@@ -709,6 +892,9 @@ impl SimpleComponent for AppModel {
         app.set_accelerators_for_action::<RecordAction>(&["r", "R"]);
         app.set_accelerators_for_action::<PreferencesAction>(&["<Ctrl>comma"]);
         app.set_accelerators_for_action::<GalleryAction>(&["<Ctrl>g"]);
+        app.set_accelerators_for_action::<ToggleModeAction>(&["m", "M"]);
+        app.set_accelerators_for_action::<ToggleGridAction>(&["g", "G"]);
+        app.set_accelerators_for_action::<ToggleCrossAction>(&["c", "C"]);
 
         ComponentParts { model, widgets }
     }
@@ -851,6 +1037,90 @@ impl SimpleComponent for AppModel {
                 self.gallery_open = false;
             }
             Input::GalleryToast(text) => self.show_toast(adw::Toast::new(text)),
+            Input::ToggleMode => self.set_mode(self.mode.toggled()),
+            Input::ModeToggled => {
+                let mode = if self.mode_bench_btn.is_active() {
+                    AppMode::Bench
+                } else {
+                    AppMode::Explore
+                };
+                self.set_mode(mode);
+            }
+            Input::ToggleGrid => {
+                if self.bench_only() {
+                    self.config.overlays.grid.enabled = !self.config.overlays.grid.enabled;
+                    self.overlays_changed();
+                }
+            }
+            Input::ToggleCrosshair => {
+                if self.bench_only() {
+                    self.config.overlays.crosshair.enabled =
+                        !self.config.overlays.crosshair.enabled;
+                    self.overlays_changed();
+                }
+            }
+            Input::SetGridEnabled(enabled) => {
+                if self.config.overlays.grid.enabled != enabled {
+                    self.config.overlays.grid.enabled = enabled;
+                    self.overlays_changed();
+                }
+            }
+            Input::SetGridSpacing(px) => {
+                let px = px.clamp(
+                    hiview_core::MIN_GRID_SPACING_PX,
+                    hiview_core::MAX_GRID_SPACING_PX,
+                );
+                if self.config.overlays.grid.spacing != GridSpacing::Pixels(px) {
+                    self.config.overlays.grid.spacing = GridSpacing::Pixels(px);
+                    self.overlays_changed();
+                }
+            }
+            Input::SetGridColor(index) => {
+                if let Some(&color) = OverlayColor::PRESETS.get(index as usize)
+                    && self.config.overlays.grid.color != color
+                {
+                    self.config.overlays.grid.color = color;
+                    self.overlays_changed();
+                }
+            }
+            Input::SetGridOpacity(opacity) => {
+                let opacity = opacity.clamp(0.0, 1.0);
+                if self.config.overlays.grid.opacity != opacity {
+                    self.config.overlays.grid.opacity = opacity;
+                    self.overlays_changed();
+                }
+            }
+            Input::SetCrosshairEnabled(enabled) => {
+                if self.config.overlays.crosshair.enabled != enabled {
+                    self.config.overlays.crosshair.enabled = enabled;
+                    self.overlays_changed();
+                }
+            }
+            Input::SetCrosshairStyle(index) => {
+                let style = match index {
+                    1 => CrosshairStyle::Circle,
+                    2 => CrosshairStyle::Ticks,
+                    _ => CrosshairStyle::Cross,
+                };
+                if self.config.overlays.crosshair.style != style {
+                    self.config.overlays.crosshair.style = style;
+                    self.overlays_changed();
+                }
+            }
+            Input::SetCrosshairColor(index) => {
+                if let Some(&color) = OverlayColor::PRESETS.get(index as usize)
+                    && self.config.overlays.crosshair.color != color
+                {
+                    self.config.overlays.crosshair.color = color;
+                    self.overlays_changed();
+                }
+            }
+            Input::SetBurnOverlays(burn) => {
+                if self.config.photo.burn_overlays != burn {
+                    self.config.photo.burn_overlays = burn;
+                    self.persist_config();
+                }
+            }
         }
     }
 }
@@ -871,6 +1141,13 @@ impl AppModel {
         // overlay that is not in the widget tree (toasts never visible).
         self.toast_overlay = widgets.toast_overlay.clone();
         self.shutter_flash = widgets.shutter_flash.clone();
+        self.mode_bench_btn = widgets.mode_bench_btn.clone();
+        self.split_view = widgets.split_view.clone();
+        self.bench_sidebar = widgets.bench_sidebar.clone();
+        // Push the persisted overlay/mode state into the viewport — the
+        // placeholder overlays stay `None` (hidden) until this runs.
+        self.apply_overlays();
+        self.install_focus_return();
     }
 
     /// Syncs derived UI after a camera state change.
@@ -1087,15 +1364,63 @@ impl AppModel {
         });
     }
 
+    /// Switches Explorar/Bancada (header toggle or `M`), persists the
+    /// choice and applies the visible consequences: the side panel only
+    /// exists in Bancada and overlays are only drawn there.
+    fn set_mode(&mut self, mode: AppMode) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        self.config.mode = mode;
+        self.persist_config();
+        self.apply_overlays();
+        tracing::info!("mode switched to {mode:?}");
+    }
+
+    /// Pushes the effective overlay state into the viewport:
+    /// `overlays_for` hides everything in Explorar and when all overlays
+    /// are off; switching back to Bancada restores the saved settings.
+    fn apply_overlays(&self) {
+        self.viewport
+            .set_overlays(overlays_for(self.mode, &self.config.overlays));
+    }
+
+    /// Any overlay setting changed: persist and redraw.
+    fn overlays_changed(&self) {
+        self.persist_config();
+        self.apply_overlays();
+    }
+
+    /// Whether a Bancada-only tool may run. In Explorar the overlay
+    /// shortcuts show a toast instead of silently toggling hidden state
+    /// (docs/CONVENTIONS.md §13 — same shortcuts, explained behavior).
+    fn bench_only(&mut self) -> bool {
+        if self.mode == AppMode::Bench {
+            true
+        } else {
+            self.show_toast(adw::Toast::new(strings::BENCH_ONLY));
+            false
+        }
+    }
+
     /// Takes a photo from the frozen/latest frame (section 6.6). Works
-    /// while recording — photos are still allowed (M4).
+    /// while recording — photos are still allowed (M4). When "Gravar
+    /// sobreposições na foto" is on, the visible overlays are burned in
+    /// (frozen-frame photos included — `photo_frame` already picks the
+    /// frozen frame).
     fn take_photo(&mut self) {
         if self.state == CameraState::Streaming
             && let Some(frame) = self.viewport.photo_frame()
         {
+            let overlays = if self.config.photo.burn_overlays {
+                overlays_for(self.mode, &self.config.overlays)
+            } else {
+                None
+            };
             if self
                 .photos
-                .take(&frame, &self.config.photo, self.photo_dir())
+                .take(&frame, &self.config.photo, self.photo_dir(), overlays)
                 .is_ok()
             {
                 self.flash_shutter();
@@ -1371,6 +1696,60 @@ impl AppModel {
         });
     }
 
+    /// Keeps single-key accelerators alive by returning keyboard focus
+    /// to the viewport whenever it escaped into an editable widget —
+    /// while a SpinButton/entry holds focus, GTK routes bare letters
+    /// into it and `G`, `C`, `M`, `Space`… silently stop working.
+    fn install_focus_return(&self) {
+        fn is_editing(w: &gtk::Widget) -> bool {
+            w.is::<gtk::Editable>() || w.is::<gtk::TextView>()
+        }
+        // Enter inside an editable commits (bubble phase runs after the
+        // widget's own handling) and returns focus to the viewport.
+        let key = gtk::EventControllerKey::new();
+        key.connect_key_pressed({
+            let viewport = self.viewport.clone();
+            let window = self.window.clone();
+            move |_, key, _, _| {
+                if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
+                    let editing = GtkWindowExt::focus(&window).is_some_and(|f| is_editing(&f));
+                    if editing {
+                        viewport.grab_focus();
+                    }
+                }
+                glib::Propagation::Proceed
+            }
+        });
+        self.window.add_controller(key.clone());
+        // Focus inside an editable when the window reactivates (a
+        // dialog or the gallery closed) returns to the viewport.
+        self.window.connect_notify_local(Some("is-active"), {
+            let viewport = self.viewport.clone();
+            move |win, _| {
+                if !win.is_active() {
+                    return;
+                }
+                let stuck = GtkWindowExt::focus(win).is_some_and(|f| is_editing(&f));
+                if stuck {
+                    viewport.grab_focus();
+                }
+            }
+        });
+        // Pointer leaving the Bancada panel ends an edit session.
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_leave({
+            let viewport = self.viewport.clone();
+            let window = self.window.clone();
+            move |_| {
+                let stuck = GtkWindowExt::focus(&window).is_some_and(|f| is_editing(&f));
+                if stuck {
+                    viewport.grab_focus();
+                }
+            }
+        });
+        self.bench_sidebar.add_controller(motion);
+    }
+
     /// Builds and presents the preferences dialog (Fotos page).
     fn open_preferences(&mut self, sender: &ComponentSender<Self>) {
         let dialog = adw::PreferencesDialog::new();
@@ -1438,8 +1817,23 @@ impl AppModel {
         group.add(&folder_row);
         self.pref_folder_row = Some(folder_row);
 
+        let burn_row = adw::SwitchRow::new();
+        burn_row.set_title(strings::PREFS_BURN_LABEL);
+        burn_row.set_active(self.config.photo.burn_overlays);
+        burn_row.connect_active_notify({
+            let sender = sender.clone();
+            move |row| sender.input(Input::SetBurnOverlays(row.is_active()))
+        });
+        group.add(&burn_row);
+
         page.add(&group);
         dialog.add(&page);
+        dialog.connect_closed({
+            let viewport = self.viewport.clone();
+            move |_| {
+                viewport.grab_focus();
+            }
+        });
         dialog.present(Some(&self.window));
     }
 }

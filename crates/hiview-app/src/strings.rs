@@ -198,6 +198,57 @@ pub const OPEN_FAILED: &str = "Não foi possível abrir o arquivo";
 /// Label of the in-progress recording tile.
 pub const RECORDING_TILE: &str = "Gravando…";
 
+/// Header mode toggle: clean UI for casual exploring.
+pub const MODE_EXPLORE_LABEL: &str = "Explorar";
+
+/// Header mode toggle: electronics workbench UI.
+pub const MODE_BENCH_LABEL: &str = "Bancada";
+
+/// Tooltip of both mode toggles (`M`).
+pub const MODE_TOGGLE_TOOLTIP: &str = "Alternar Explorar/Bancada (M)";
+
+/// Toast when `G` or `C` is pressed in Explorar mode (§13).
+pub const BENCH_ONLY: &str = "Disponível no modo Bancada";
+
+/// Title of the Bancada side panel header.
+pub const BENCH_PANEL_TITLE: &str = "Bancada";
+
+/// Side panel group title: grid settings.
+pub const GRID_GROUP_TITLE: &str = "Grade";
+
+/// Side panel row: grid on/off (`G`).
+pub const GRID_SHOW_LABEL: &str = "Mostrar grade (G)";
+
+/// Side panel row: grid spacing in image pixels.
+pub const GRID_SPACING_LABEL: &str = "Espaçamento (px)";
+
+/// Side panel row: grid line color.
+pub const GRID_COLOR_LABEL: &str = "Cor";
+
+/// Side panel row: grid line opacity.
+pub const GRID_OPACITY_LABEL: &str = "Opacidade";
+
+/// Side panel group title: crosshair settings.
+pub const CROSS_GROUP_TITLE: &str = "Mira";
+
+/// Side panel row: crosshair on/off (`C`).
+pub const CROSS_SHOW_LABEL: &str = "Mostrar mira (C)";
+
+/// Side panel row: crosshair style.
+pub const CROSS_STYLE_LABEL: &str = "Estilo";
+
+/// Side panel row: crosshair color.
+pub const CROSS_COLOR_LABEL: &str = "Cor";
+
+/// Color preset names — same order as `OverlayColor::PRESETS`.
+pub const COLOR_NAMES: [&str; 5] = ["Verde", "Amarelo", "Ciano", "Branco", "Vermelho"];
+
+/// Crosshair style names — same order as `CrosshairStyle` variants.
+pub const STYLE_NAMES: [&str; 3] = ["Cruz", "Cruz com círculo", "Cruz com escala"];
+
+/// Preferences row: burn grid/crosshair into saved photos (§6.6).
+pub const PREFS_BURN_LABEL: &str = "Gravar sobreposições na foto";
+
 /// Body of the trash confirmation dialog.
 pub fn trash_confirm_body(name: &str) -> String {
     format!("\"{name}\" será movido para a lixeira. Você pode recuperá-lo depois.")

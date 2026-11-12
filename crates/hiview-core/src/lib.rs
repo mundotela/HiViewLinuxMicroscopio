@@ -12,6 +12,7 @@ mod error;
 mod gallery;
 mod imaging;
 mod orientation;
+mod overlay;
 mod view;
 
 pub use config::{AppConfig, ConfigLoad, PhotoConfig, config_path, load_config, save_config};
@@ -23,8 +24,14 @@ pub use gallery::{
     read_duration_sidecar, scan_media, thumb_from_rgba, write_duration_sidecar, write_thumb_png,
 };
 pub use imaging::{
-    JPEG_QUALITY, PhotoFormat, PhotoResolution, encode_photo, photo_filename, rgba_image,
-    save_photo, unique_photo_path, video_filename,
+    JPEG_QUALITY, PhotoFormat, PhotoResolution, encode_image, encode_photo, photo_filename,
+    render_photo, rgba_image, save_photo, save_photo_with, unique_photo_path, video_filename,
 };
 pub use orientation::{Orientation, ViewOrientation};
+pub use overlay::{
+    AppMode, CROSSHAIR_CIRCLE_FRACTION, CROSSHAIR_OPACITY, CROSSHAIR_TICK_LEN_PX, CrosshairConfig,
+    CrosshairStyle, DEFAULT_GRID_OPACITY, DEFAULT_GRID_SPACING_PX, DEFAULT_TICK_SPACING_PX,
+    GridConfig, GridSpacing, MAX_GRID_SPACING_PX, MIN_GRID_SPACING_PX, OverlayColor, OverlayState,
+    grid_line_positions, image_center, overlays_for,
+};
 pub use view::{MAX_SCALE, MIN_SCALE, NEAREST_FILTER_SCALE, Point, Size, ViewMode, ViewTransform};

@@ -875,6 +875,7 @@ dependencies = [
  "gtk4",
  "hiview-capture",
  "hiview-core",
+ "image",
  "libadwaita",
  "relm4",
  "signal-hook",

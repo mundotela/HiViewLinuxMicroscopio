@@ -9,6 +9,7 @@
 mod app;
 mod cli;
 mod components;
+mod overlay;
 mod services;
 mod strings;
 mod toast;

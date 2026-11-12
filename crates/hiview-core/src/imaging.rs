@@ -138,23 +138,33 @@ pub fn rgba_image(data: &[u8], width: u32, height: u32, stride: usize) -> Result
     Ok(image)
 }
 
-/// Encodes a strided RGBA frame to PNG or JPEG, upscaling with Lanczos3
-/// when `resolution` is interpolated (§6.6).
-pub fn encode_photo(
+/// Converts and upscales a strided RGBA frame to the output resolution
+/// (Lanczos3 when interpolated), without encoding.
+///
+/// # Errors
+/// Returns [`Error::BadFrame`] when the buffer is too short.
+pub fn render_photo(
     data: &[u8],
     width: u32,
     height: u32,
     stride: usize,
     resolution: PhotoResolution,
-    format: PhotoFormat,
-) -> Result<Vec<u8>> {
+) -> Result<RgbaImage> {
     let image = rgba_image(data, width, height, stride)?;
     let (out_w, out_h) = resolution.output_size((width, height));
-    let image = if (out_w, out_h) == (width, height) {
+    Ok(if (out_w, out_h) == (width, height) {
         image
     } else {
         image::imageops::resize(&image, out_w, out_h, FilterType::Lanczos3)
-    };
+    })
+}
+
+/// Encodes an image at output resolution to PNG or JPEG.
+///
+/// # Errors
+/// Returns [`Error`] on encoder failure.
+pub fn encode_image(image: &RgbaImage, format: PhotoFormat) -> Result<Vec<u8>> {
+    let (out_w, out_h) = image.dimensions();
     let mut buf = Vec::new();
     match format {
         PhotoFormat::Png => PngEncoder::new(&mut buf).write_image(
@@ -164,7 +174,7 @@ pub fn encode_photo(
             ExtendedColorType::Rgba8,
         )?,
         PhotoFormat::Jpeg => {
-            let rgb = image::DynamicImage::ImageRgba8(image).into_rgb8();
+            let rgb = image::DynamicImage::ImageRgba8(image.clone()).into_rgb8();
             JpegEncoder::new_with_quality(&mut buf, JPEG_QUALITY).write_image(
                 rgb.as_raw(),
                 out_w,
@@ -176,8 +186,50 @@ pub fn encode_photo(
     Ok(buf)
 }
 
+/// Encodes a strided RGBA frame to PNG or JPEG, upscaling with Lanczos3
+/// when `resolution` is interpolated (§6.6).
+pub fn encode_photo(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    resolution: PhotoResolution,
+    format: PhotoFormat,
+) -> Result<Vec<u8>> {
+    encode_image(
+        &render_photo(data, width, height, stride, resolution)?,
+        format,
+    )
+}
+
 /// Full save operation for the worker thread: creates the folder, picks a
 /// collision-free name, encodes and writes the file. Returns the path.
+///
+/// `apply` runs on the output-resolution image right before encoding —
+/// the app uses it to burn overlays into the photo (§6.6, M6).
+// One argument over the lint budget: the frame fields mirror `save_photo`,
+// which is already at the limit.
+#[allow(clippy::too_many_arguments)]
+pub fn save_photo_with(
+    data: &[u8],
+    width: u32,
+    height: u32,
+    stride: usize,
+    resolution: PhotoResolution,
+    format: PhotoFormat,
+    dir: &Path,
+    apply: impl FnOnce(&mut RgbaImage),
+) -> Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let path = unique_photo_path(dir, &photo_filename(Local::now(), format));
+    let mut image = render_photo(data, width, height, stride, resolution)?;
+    apply(&mut image);
+    let encoded = encode_image(&image, format)?;
+    fs::write(&path, encoded)?;
+    Ok(path)
+}
+
+/// Full save operation with no post-processing — see [`save_photo_with`].
 pub fn save_photo(
     data: &[u8],
     width: u32,
@@ -187,11 +239,7 @@ pub fn save_photo(
     format: PhotoFormat,
     dir: &Path,
 ) -> Result<PathBuf> {
-    fs::create_dir_all(dir)?;
-    let path = unique_photo_path(dir, &photo_filename(Local::now(), format));
-    let encoded = encode_photo(data, width, height, stride, resolution, format)?;
-    fs::write(&path, encoded)?;
-    Ok(path)
+    save_photo_with(data, width, height, stride, resolution, format, dir, |_| {})
 }
 
 #[cfg(test)]
