@@ -17,12 +17,16 @@
 //! Stage order (fixed by design, matches the previous pipeline order):
 //! 1. brightness + contrast + gamma — fused into one 256-entry LUT;
 //! 2. saturation — blend with BT.601 luma, integer math;
-//! 3. sharpen — 3×3 unsharp mask, integer math, borders replicated.
+//! 3. sharpen — 3×3 unsharp mask on **luma only**, integer math,
+//!    borders replicated. The luma delta is added back equally to
+//!    R, G and B: ~⅓ of the per-channel work and no coloured
+//!    fringes at edges (hue stays put by construction).
 
 use crate::ImageAdjust;
 
 /// Luma coefficients for Rec.601 scaled by 256 (they sum to 256, so a
 /// single `>> 8` normalizes): 0.299/0.587/0.114.
+// u16 suffices for the luma dot product: 255·(77+150+29) = 65280.
 const LUMA_R: i32 = 77;
 const LUMA_G: i32 = 150;
 const LUMA_B: i32 = 29;
@@ -73,21 +77,33 @@ impl AdjustPlan {
     }
 
     /// The whole plan in one pass when sharpen is on: a three-row ring
-    /// holds the stage-1 pixels of rows y−1, y, y+1 — as it advances,
-    /// the next row's stage-1 version is produced on the fly and the
-    /// unsharp output of the current row is written back. No extra
-    /// pass over the frame and no full-frame copy: the working set
-    /// stays hot in cache, which is what the §7 CPU budget sees.
+    /// holds the stage-1 pixels of rows y−1, y, y+1 and a parallel ring
+    /// their BT.601 luma — as it advances, the next row's stage-1
+    /// version is produced on the fly and the unsharp output of the
+    /// current row is written back. No extra pass over the frame and
+    /// no full-frame copy: the working set stays hot in cache, which
+    /// is what the §7 CPU budget sees.
     ///
-    /// Unsharp mask `out = v + k·(v − avg4)` with `k = sharpen_q/256`,
-    /// computed as `v + (4v − Σ4)·q/1024` so 100 % reproduces the
-    /// classic full-strength unsharp. Border rows and columns replicate
-    /// the edge pixel.
+    /// Unsharp mask on **luma**: `Δ = (4·Y − ΣY4)·q/1024` (q =
+    /// sharpen_q, so 100 % reproduces the classic full-strength
+    /// unsharp), then `out[c] = stage1[c] + Δ` — the same delta for
+    /// all three channels keeps every channel difference, so hue can
+    /// never drift at an edge. Border rows and columns replicate the
+    /// edge pixel.
     fn apply_fused(&self, data: &mut [u8], width: usize, height: usize, stride: usize) {
+        // ring[r % 3]/lring[r % 3] hold the stage-1 pixels and luma of
+        // row r. Row 0 doubles as the clamped `up` row of y=0.
         let mut ring = [vec![0u8; stride], vec![0u8; stride], vec![0u8; stride]];
-        // ring[r % 3] holds the stage-1 pixels of row r. Row 0 doubles
-        // as the clamped `up` row of y=0.
-        self.stage1_row(&data[..stride], &mut ring[0], width);
+        let mut lring = [vec![0u8; width], vec![0u8; width], vec![0u8; width]];
+        let mut lrow4 = vec![0u8; stride];
+        let mut delta4 = vec![0i16; stride];
+        self.stage1_row(
+            &data[..stride],
+            &mut ring[0],
+            &mut lring[0],
+            &mut lrow4,
+            width,
+        );
         let q = self.sharpen_q;
         for y in 0..height {
             // Row y+1 is still untouched in `data`; write its stage-1
@@ -97,79 +113,160 @@ impl AdjustPlan {
             self.stage1_row(
                 &data[dn_row * stride..dn_row * stride + stride],
                 &mut ring[dn_row % 3],
+                &mut lring[dn_row % 3],
+                &mut lrow4,
                 width,
             );
-            let (up, me, dn) = (
-                &ring[y.saturating_sub(1) % 3],
-                &ring[y % 3],
-                &ring[dn_row % 3],
+            let (up_l, me_l, dn_l) = (
+                &lring[y.saturating_sub(1) % 3],
+                &lring[y % 3],
+                &lring[dn_row % 3],
             );
+            let me = &ring[y % 3];
             let out = &mut data[y * stride..y * stride + stride];
-            for x in 0..width {
-                let lf = x.saturating_sub(1) * 4;
-                let cc = x * 4;
-                let rt = (x + 1).min(width - 1) * 4;
-                for c in 0..3 {
-                    let v = i32::from(me[cc + c]);
-                    let edge = 4 * v
-                        - (i32::from(up[cc + c])
-                            + i32::from(dn[cc + c])
-                            + i32::from(me[lf + c])
-                            + i32::from(me[rt + c]));
-                    out[cc + c] = clamp_u8(v + ((edge * q) >> 10));
+
+            // Interior luma deltas, expanded to `[d,d,d,0]` per pixel
+            // so the output pass is a flat byte loop and alpha passes
+            // through for free — one zipped pass over the five shifted
+            // slices, no per-pixel indexing or bounds checks.
+            if width >= 3 {
+                for (d4, ((((c, l), r), u), dn)) in delta4[4..width * 4 - 4]
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(
+                        me_l[1..width - 1]
+                            .iter()
+                            .zip(&me_l[..width - 2])
+                            .zip(&me_l[2..width])
+                            .zip(&up_l[1..width - 1])
+                            .zip(&dn_l[1..width - 1]),
+                    )
+                {
+                    let edge = 4 * i32::from(*c)
+                        - (i32::from(*l) + i32::from(*r) + i32::from(*u) + i32::from(*dn));
+                    let dv = ((edge * q) >> 10) as i16;
+                    d4[0] = dv;
+                    d4[1] = dv;
+                    d4[2] = dv;
+                    d4[3] = 0;
                 }
+            }
+            // Edge columns replicate the border pixel (l=c at x=0,
+            // r=c at x=w−1).
+            {
+                let c = i32::from(me_l[0]);
+                let r = i32::from(me_l[usize::from(width > 1)]);
+                let edge = 3 * c - (r + i32::from(up_l[0]) + i32::from(dn_l[0]));
+                let dv = ((edge * q) >> 10) as i16;
+                delta4[0] = dv;
+                delta4[1] = dv;
+                delta4[2] = dv;
+                delta4[3] = 0;
+            }
+            if width > 1 {
+                let x = width - 1;
+                let c = i32::from(me_l[x]);
+                let l = i32::from(me_l[x - 1]);
+                let edge = 3 * c - (l + i32::from(up_l[x]) + i32::from(dn_l[x]));
+                let dv = ((edge * q) >> 10) as i16;
+                delta4[x * 4] = dv;
+                delta4[x * 4 + 1] = dv;
+                delta4[x * 4 + 2] = dv;
+                delta4[x * 4 + 3] = 0;
+            }
+
+            // Write RGBA: stage-1 pixel + the shared luma delta — a
+            // flat byte loop the compiler can vectorize; alpha gets
+            // delta 0 and passes through.
+            for ((s, d), &dv) in me[..width * 4]
+                .iter()
+                .zip(out[..width * 4].iter_mut())
+                .zip(delta4.iter())
+            {
+                *d = (i16::from(*s) + dv).clamp(0, 255) as u8;
             }
         }
     }
 
-    /// Writes the stage-1 version of `srow` into `drow` — the verbatim
-    /// row when LUT and saturation are both neutral.
-    fn stage1_row(&self, srow: &[u8], drow: &mut [u8], width: usize) {
-        if self.lut.is_some() || self.sat_q != 256 {
-            self.ls_row(srow, drow, width);
+    /// Writes the stage-1 version of `srow` into `drow` and its luma
+    /// into `lrow` — flat slice passes so the compiler can vectorize
+    /// them. Luma is invariant under the saturation mix (it blends
+    /// around luma itself), so `lrow` is computed before it and stays
+    /// correct for the unsharp ring. `lrow4` is scratch for the mix.
+    fn stage1_row(
+        &self,
+        srow: &[u8],
+        drow: &mut [u8],
+        lrow: &mut [u8],
+        lrow4: &mut [u8],
+        width: usize,
+    ) {
+        if let Some(lut) = &self.lut {
+            for (s, d) in srow[..width * 4]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(drow[..width * 4].as_chunks_mut::<4>().0.iter_mut())
+            {
+                d[0] = lut[usize::from(s[0])];
+                d[1] = lut[usize::from(s[1])];
+                d[2] = lut[usize::from(s[2])];
+                d[3] = s[3];
+            }
         } else {
             drow.copy_from_slice(srow);
         }
+        luma_row(drow, lrow, width);
+        if self.sat_q != 256 {
+            for ((l4, &y), d) in lrow4[..width * 4]
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(lrow.iter())
+                .zip(drow[..width * 4].as_chunks::<4>().0.iter())
+            {
+                l4[0] = y;
+                l4[1] = y;
+                l4[2] = y;
+                l4[3] = d[3];
+            }
+            self.satmix_row(drow, lrow4, width);
+        }
     }
 
-    /// One row of stage 1+2 read `srow` → write `drow`: LUT on each
-    /// channel, then the saturation pull toward/away from BT.601 luma.
-    /// Reading and writing different buffers lets stage 1 feed the
-    /// unsharp ring without a separate pass over the frame.
-    fn ls_row(&self, srow: &[u8], drow: &mut [u8], width: usize) {
-        for (s, d) in srow[..width * 4]
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(drow[..width * 4].as_chunks_mut::<4>().0.iter_mut())
-        {
-            d[3] = s[3];
-            let (r, g, b) = match &self.lut {
-                Some(lut) => (
-                    lut[usize::from(s[0])],
-                    lut[usize::from(s[1])],
-                    lut[usize::from(s[2])],
-                ),
-                None => (s[0], s[1], s[2]),
-            };
-            if self.sat_q == 256 {
-                d[0] = r;
-                d[1] = g;
-                d[2] = b;
-            } else {
-                let (r, g, b) = (i32::from(r), i32::from(g), i32::from(b));
-                let luma = (r * LUMA_R + g * LUMA_G + b * LUMA_B) >> 8;
-                d[0] = clamp_u8(luma + (((r - luma) * self.sat_q) >> 8));
-                d[1] = clamp_u8(luma + (((g - luma) * self.sat_q) >> 8));
-                d[2] = clamp_u8(luma + (((b - luma) * self.sat_q) >> 8));
+    /// In-place saturation mix on one row: `out = (c·q + l·(256−q))>>8`
+    /// per byte — bit-exact with `luma + (c−luma)·q>>8` because `256·l`
+    /// is a multiple of the shift. The alpha byte reads `l = a`, so it
+    /// survives untouched for free.
+    ///
+    /// For sat ≤ 1 (`qm ≥ 0`) both products fit u16 and the sum is
+    /// computed via the exact low-byte carry split — `(a+b)>>8 ==
+    /// (a>>8)+(b>>8)+((a&255)+(b&255))>>8` — so the whole loop runs in
+    /// 16-bit lanes, and its result is provably in `0..=255` (weights
+    /// sum to 256), needing no clamp.
+    fn satmix_row(&self, drow: &mut [u8], lrow4: &[u8], width: usize) {
+        let (q, qm) = (self.sat_q, 256 - self.sat_q);
+        if qm >= 0 {
+            let (q, qm) = (q as u16, qm as u16);
+            for (px, &l) in drow[..width * 4].iter_mut().zip(lrow4.iter()) {
+                // Exact 17-bit sum in u16 lanes: `(a+b)>>8` equals
+                // `((a+b)>>1)>>7`, and the half-sum `a/2+b/2+(a&b&1)`
+                // never exceeds 65281 — no carry into a wider lane.
+                let a = u16::from(*px) * q;
+                let b = u16::from(l) * qm;
+                *px = (((a >> 1) + (b >> 1) + (a & b & 1)) >> 7) as u8;
+            }
+        } else {
+            for (px, &l) in drow[..width * 4].iter_mut().zip(lrow4.iter()) {
+                *px = clamp_u8((i32::from(*px) * q + i32::from(l) * qm) >> 8);
             }
         }
     }
 
-    /// Stage 1+2 fused per pixel, in place: LUT on each channel, then
-    /// pull each channel toward (sat < 1) or away from (sat > 1) its
-    /// BT.601 luma. Used when sharpen is off — no neighbourhood is
-    /// needed, so no ring exists.
+    /// LUT then saturation, in place — used when unsharp is off but at
+    /// least one pointwise stage is active. Same flat passes as
+    /// [`Self::stage1_row`], minus the ring/luma outputs.
     fn apply_lut_and_saturation(
         &self,
         data: &mut [u8],
@@ -177,21 +274,32 @@ impl AdjustPlan {
         height: usize,
         stride: usize,
     ) {
+        let mut lrow = vec![0u8; width];
+        let mut lrow4 = vec![0u8; stride];
         for y in 0..height {
-            let row = &mut data[y * stride..y * stride + width * 4];
-            for px in row.as_chunks_mut::<4>().0 {
-                if let Some(lut) = &self.lut {
+            let row = &mut data[y * stride..y * stride + stride];
+            if let Some(lut) = &self.lut {
+                for px in row[..width * 4].as_chunks_mut::<4>().0 {
                     px[0] = lut[usize::from(px[0])];
                     px[1] = lut[usize::from(px[1])];
                     px[2] = lut[usize::from(px[2])];
                 }
-                if self.sat_q != 256 {
-                    let (r, g, b) = (i32::from(px[0]), i32::from(px[1]), i32::from(px[2]));
-                    let luma = (r * LUMA_R + g * LUMA_G + b * LUMA_B) >> 8;
-                    px[0] = clamp_u8(luma + (((r - luma) * self.sat_q) >> 8));
-                    px[1] = clamp_u8(luma + (((g - luma) * self.sat_q) >> 8));
-                    px[2] = clamp_u8(luma + (((b - luma) * self.sat_q) >> 8));
+            }
+            if self.sat_q != 256 {
+                luma_row(row, &mut lrow, width);
+                for ((l4, &y), px) in lrow4[..width * 4]
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(lrow.iter())
+                    .zip(row[..width * 4].as_chunks::<4>().0.iter())
+                {
+                    l4[0] = y;
+                    l4[1] = y;
+                    l4[2] = y;
+                    l4[3] = px[3];
                 }
+                self.satmix_row(row, &lrow4, width);
             }
         }
     }
@@ -216,8 +324,29 @@ fn build_lut(a: &ImageAdjust) -> [u8; 256] {
     lut
 }
 
+/// BT.601 luma of one RGB pixel, 0–255.
+fn luma(r: u8, g: u8, b: u8) -> u8 {
+    // u16 arithmetic: the dot product tops out at 65280 and every term
+    // is positive, so it vectorizes at twice i32's lane width.
+    ((u16::from(r) * LUMA_R as u16 + u16::from(g) * LUMA_G as u16 + u16::from(b) * LUMA_B as u16)
+        >> 8) as u8
+}
+
+/// The luma row of a stage-1 RGBA row — one zipped pass.
+fn luma_row(srow: &[u8], lrow: &mut [u8], width: usize) {
+    for (s, l) in srow[..width * 4]
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(lrow.iter_mut())
+    {
+        *l = luma(s[0], s[1], s[2]);
+    }
+}
+
 fn clamp_u8(v: i32) -> u8 {
-    u8::try_from(v.clamp(0, 255)).unwrap_or(u8::MAX)
+    // `as u8` after the clamp is exact — and branch-free.
+    v.clamp(0, 255) as u8
 }
 
 #[cfg(test)]
@@ -404,5 +533,60 @@ mod tests {
         .apply(&mut full, W, H, W * 4);
         let full_dark = full[(H / 2 * W + 2) * 4];
         assert!(half_dark < 100 && half_dark > full_dark);
+    }
+
+    /// Luma-only unsharp adds one shared delta to R, G and B, so
+    /// channel differences survive untouched — a sharpened coloured
+    /// edge can never pick up coloured fringes (no hue shift). The
+    /// bit-exact clip rails are the only exception; mid-range pixels
+    /// keep their hue exactly.
+    #[test]
+    fn sharpen_preserves_hue_on_colored_edge() {
+        const W: usize = 8;
+        const H: usize = 5;
+        let color = |x: usize| -> [i32; 3] {
+            if x < W / 2 {
+                [200, 80, 90]
+            } else {
+                [40, 60, 180]
+            }
+        };
+        let mut frame = vec![0u8; W * H * 4];
+        for y in 0..H {
+            for x in 0..W {
+                let i = (y * W + x) * 4;
+                let [r, g, b] = color(x);
+                frame[i] = r as u8;
+                frame[i + 1] = g as u8;
+                frame[i + 2] = b as u8;
+                frame[i + 3] = 255;
+            }
+        }
+        let plan = AdjustPlan::compile(&ImageAdjust {
+            sharpen: 100.0,
+            ..adjust()
+        })
+        .unwrap_or_else(|| panic!("plan"));
+        plan.apply(&mut frame, W, H, W * 4);
+        let mut moved = 0;
+        for y in 0..H {
+            for x in 0..W {
+                let i = (y * W + x) * 4;
+                let [r0, g0, b0] = color(x);
+                let (r1, g1, b1) = (
+                    i32::from(frame[i]),
+                    i32::from(frame[i + 1]),
+                    i32::from(frame[i + 2]),
+                );
+                if (r1, g1, b1) != (r0, g0, b0) {
+                    moved += 1;
+                }
+                if r1 > 0 && r1 < 255 && g1 > 0 && g1 < 255 && b1 > 0 && b1 < 255 {
+                    assert_eq!(r1 - g1, r0 - g0, "({x},{y}) R−G drifted");
+                    assert_eq!(g1 - b1, g0 - b0, "({x},{y}) G−B drifted");
+                }
+            }
+        }
+        assert!(moved > 0, "edge pixels must move");
     }
 }
