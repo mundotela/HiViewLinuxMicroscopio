@@ -3,8 +3,8 @@
 
 //! Custom live-video viewport (docs/ARCHITECTURE.md §6.5): draws the
 //! current frame with `append_scaled_texture` under a [`ViewTransform`]
-//! (fit, 100%, cursor-centered zoom, drag pan). Overlay rendering via
-//! `append_cairo` is an M6 hook, intentionally left empty.
+//! (fit, 100%, cursor-centered zoom, drag pan), then overlays with
+//! `append_cairo` via [`crate::overlay::OverlayRenderer`] (§6.9).
 //!
 //! Gestures (docs/USER_MANUAL.md §6): mouse wheel zooms around the cursor,
 //! dragging pans, double-click toggles between fit and 100%.
@@ -17,7 +17,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::ObjectSubclassIsExt;
 
 use hiview_capture::Frame;
-use hiview_core::{Size, ViewTransform};
+use hiview_core::{OverlayState, Size, ViewTransform};
 
 glib::wrapper! {
     /// Widget that renders camera frames with a view transform.
@@ -126,6 +126,13 @@ impl Viewport {
         imp.frame.replace(None);
         imp.frame_size.set(Size::default());
         imp.transform.replace(ViewTransform::default());
+        self.queue_draw();
+    }
+
+    /// Sets the overlays drawn over the frame (§6.9), or `None` to hide
+    /// them (Explorar mode, or every overlay toggled off).
+    pub fn set_overlays(&self, overlays: Option<OverlayState>) {
+        self.imp().overlays.replace(overlays);
         self.queue_draw();
     }
 

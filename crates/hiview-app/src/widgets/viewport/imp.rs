@@ -11,7 +11,9 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 
 use hiview_capture::Frame;
-use hiview_core::{NEAREST_FILTER_SCALE, Point, Size, ViewMode, ViewTransform};
+use hiview_core::{NEAREST_FILTER_SCALE, OverlayState, Point, Size, ViewMode, ViewTransform};
+
+use crate::overlay::OverlayRenderer;
 
 /// Per-wheel-notch zoom factor (docs/USER_MANUAL.md §6: smooth steps).
 pub(super) const ZOOM_STEP: f64 = 1.25;
@@ -24,6 +26,9 @@ pub struct Viewport {
     pub(super) transform: RefCell<ViewTransform>,
     pub(super) drag_start: RefCell<Option<ViewTransform>>,
     pub(super) frozen: Cell<bool>,
+    /// Overlays to draw over the frame (§6.9); `None` hides them
+    /// entirely (Explorar mode or everything toggled off).
+    pub(super) overlays: RefCell<Option<OverlayState>>,
 }
 
 #[glib::object_subclass]
@@ -63,8 +68,16 @@ impl WidgetImpl for Viewport {
             gsk::ScalingFilter::Nearest
         };
         snapshot.append_scaled_texture(&texture, filter, &bounds);
-        // M6 hook: overlays (measurement lines, crosshair, scale bar) will be
-        // drawn here with `append_cairo`, in widget space on top of the frame.
+        // Overlay state is copied out too — a borrow must never live
+        // across a GTK call (re-entrant callbacks + RefCell panic).
+        if let Some(state) = self.overlays.borrow().clone() {
+            let obj = self.obj();
+            let bounds = graphene::Rect::new(0.0, 0.0, obj.width() as f32, obj.height() as f32);
+            // The cairo node is appended when the context is dropped.
+            let cr = snapshot.append_cairo(&bounds);
+            let device_px = 1.0 / f64::from(obj.scale_factor().max(1));
+            OverlayRenderer::draw(&cr, self.frame_size.get(), &t, &state, device_px);
+        }
     }
 
     fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
