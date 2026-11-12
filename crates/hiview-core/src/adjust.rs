@@ -235,10 +235,9 @@ mod tests {
         assert!((adjust.sharpen_sigma() - SHARPEN_MAX_SIGMA / 2.0).abs() < 1e-9);
         adjust.sharpen = 1.0;
         assert_eq!(adjust.sharpen_sigma(), SHARPEN_MAX_SIGMA);
-        assert!(SHARPEN_MAX_SIGMA < 0.0);
         // Kernel is 1 + 2·ceil(2.5·|sigma|): never leave kernel 3, the
         // only size that meets the §7 CPU budget on the target machine.
-        assert!(2.5 * SHARPEN_MAX_SIGMA.abs() <= 1.0);
+        assert!(SHARPEN_MAX_SIGMA < 0.0 && 2.5 * SHARPEN_MAX_SIGMA.abs() <= 1.0);
     }
 
     /// Round-trips a partially specified TOML fragment: missing fields
