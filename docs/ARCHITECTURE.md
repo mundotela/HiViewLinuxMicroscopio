@@ -251,6 +251,8 @@ appsrc name=src is-live=true format=time caps=video/x-raw,format=RGBA,width=W,he
 
 ### 6.9 Sobreposições, medição e calibração
 
+> **Implementado no M6 (sobreposições) e no M8 (medição).** Decisões do M8: com uma ferramenta ativa, o clique esquerdo mede e o arraste da imagem passa para o **botão do meio**; atalhos `L` régua, `A` ângulo, `O` círculo; valores abaixo de 1 mm em **µm**; diâmetro com o símbolo **Ø** (o `⌀` não existe nas fontes comuns); rótulos de 19 px em negrito sobre um fundo escuro, em pixels de tela (independentes do zoom e corretos em HiDPI), e proporcionais à resolução de saída na foto; a calibração é medida em **pixels da imagem**; com calibração ativa, a grade e a escala da mira passam a usar **mm**; fotos PNG levam metadados `tEXt` (calibração, transformações, versão). Validado com a lâmina: 1,02 mm ± 0,01 no braço perpendicular à calibração; 993 µm ± 9 no círculo de 1000 µm.
+
 - **Renderizador único:** `OverlayRenderer::draw(cr: &cairo::Context, view: &ViewTransform, state: &OverlayState)`. Todas as geometrias ficam guardadas em **coordenadas de imagem**.
 - **Grade:** espaçamento em pixels ou em mm (se houver calibração), cor e opacidade configuráveis.
 - **Mira:** central, nos estilos cruz, cruz com círculo e cruz com escala.
