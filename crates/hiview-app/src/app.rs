@@ -734,6 +734,24 @@ impl SimpleComponent for AppModel {
                                 set_focusable: false,
                                 #[watch]
                                 set_visible: model.mode == AppMode::Explore,
+
+                                // The popover is attached at template
+                                // build — a post-init `set_popover`
+                                // proved fragile (it opened empty once
+                                // after a hotplug). Rows are appended
+                                // imperatively in `build_adjust_ui`.
+                                #[wrap(Some)]
+                                set_popover = &gtk::Popover {
+                                    #[name = "adjust_pop_box"]
+                                    #[wrap(Some)]
+                                    set_child = &gtk::Box {
+                                        set_orientation: gtk::Orientation::Vertical,
+                                        set_spacing: 6,
+                                        set_margin_top: 6,
+                                        set_margin_bottom: 6,
+                                        set_width_request: 280,
+                                    },
+                                },
                             },
                         },
                     },
@@ -1792,7 +1810,7 @@ impl AppModel {
     /// One label + `gtk::Scale` row wired to `Input::SetAdjust`. The
     /// returned scale is stored for value sync — Bancada rows and the
     /// Explorar popover twins share the same model value (§6.11).
-    fn adjust_row(kind: AdjustKind, sender: &ComponentSender<Self>) -> (gtk::Widget, gtk::Scale) {
+    fn adjust_row(kind: AdjustKind, sink: &Rc<dyn Fn(Input)>) -> (gtk::Widget, gtk::Scale) {
         let (min, max) = range_of(kind);
         let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step_of(kind));
         scale.set_value(ImageAdjust::default().get(kind));
@@ -1804,8 +1822,8 @@ impl AppModel {
         }
         scale.set_hexpand(true);
         scale.connect_value_changed({
-            let sender = sender.clone();
-            move |scale| sender.input(Input::SetAdjust(kind, scale.value()))
+            let sink = sink.clone();
+            move |scale| sink(Input::SetAdjust(kind, scale.value()))
         });
         let label = gtk::Label::builder()
             .label(Self::adjust_label(kind))
@@ -1833,8 +1851,12 @@ impl AppModel {
         widgets: &<Self as SimpleComponent>::Widgets,
         sender: &ComponentSender<Self>,
     ) {
+        let sink: Rc<dyn Fn(Input)> = {
+            let sender = sender.clone();
+            Rc::new(move |input| sender.input(input))
+        };
         for kind in ImageAdjust::KINDS {
-            let (row, scale) = Self::adjust_row(kind, sender);
+            let (row, scale) = Self::adjust_row(kind, &sink);
             widgets.adjust_group.add(&row);
             self.adjust_sliders.push((kind, scale));
         }
@@ -1851,23 +1873,32 @@ impl AppModel {
         self.adjust_controls
             .push(widgets.adjust_group.clone().upcast());
 
-        let popover = gtk::Popover::new();
-        let pop_box = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(6)
-            .margin_top(6)
-            .margin_bottom(6)
-            .width_request(280)
-            .build();
-        for kind in [AdjustKind::Brightness, AdjustKind::Contrast] {
-            let (row, scale) = Self::adjust_row(kind, sender);
-            pop_box.append(&row);
-            self.adjust_sliders.push((kind, scale));
+        // The popover and its box are declared in view! — attach
+        // happens at template build — so only the rows are
+        // appended here (§6.11: Brilho + Contraste only).
+        Self::build_popover_rows(&widgets.adjust_pop_box, &sink, &mut self.adjust_sliders);
+        if let Some(popover) = widgets.adjust_button.popover() {
+            crate::focus::watch_popover(&popover, &self.viewport);
         }
-        popover.set_child(Some(&pop_box));
-        widgets.adjust_button.set_popover(Some(&popover));
-        crate::focus::watch_popover(&popover, &self.viewport);
-        self.adjust_controls.push(pop_box.upcast());
+        self.adjust_controls
+            .push(widgets.adjust_pop_box.clone().upcast());
+    }
+
+    /// Exactly the two Explorar controls (§6.11): Brilho and
+    /// Contraste, each one a twin of its Bancada row — same
+    /// `Input::SetAdjust` binding, same `adjust_sliders` entry.
+    const EXPLORE_ADJUST_KINDS: [AdjustKind; 2] = [AdjustKind::Brightness, AdjustKind::Contrast];
+
+    fn build_popover_rows(
+        pop_box: &gtk::Box,
+        sink: &Rc<dyn Fn(Input)>,
+        scales: &mut Vec<(AdjustKind, gtk::Scale)>,
+    ) {
+        for kind in Self::EXPLORE_ADJUST_KINDS {
+            let (row, scale) = Self::adjust_row(kind, sink);
+            pop_box.append(&row);
+            scales.push((kind, scale));
+        }
     }
 
     /// Re-applies the stored adjustments whenever the active source
@@ -1897,13 +1928,17 @@ impl AppModel {
     /// twins, "Restaurar padrões" and stored-value re-application.
     /// (`set_value` on the twin re-emits one `SetAdjust` that converges
     /// on the same value.)
-    fn sync_adjust_sliders(&self) {
-        for (kind, scale) in &self.adjust_sliders {
-            let value = self.adjust.get(*kind);
+    fn sync_scales(adjust: &ImageAdjust, scales: &[(AdjustKind, gtk::Scale)]) {
+        for (kind, scale) in scales {
+            let value = adjust.get(*kind);
             if (scale.value() - value).abs() > f64::EPSILON {
                 scale.set_value(value);
             }
         }
+    }
+
+    fn sync_adjust_sliders(&self) {
+        Self::sync_scales(&self.adjust, &self.adjust_sliders);
     }
 
     /// Slider drags emit `value-changed` per pixel; the actual
@@ -2057,7 +2092,7 @@ fn dump_widget_tree(widget: &(impl IsA<gtk::Widget> + gtk::prelude::BuildableExt
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::PathBuf;
 
     use super::*;
@@ -2123,5 +2158,93 @@ mod tests {
         cam.is_microscope = true;
         let (label, _) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam));
         assert_eq!(label, strings::MICROSCOPE_LABEL);
+    }
+
+    /// The Explorar popover contract (§6.11, round-2 regression):
+    /// it must hold exactly the Brilho and Contraste rows, each
+    /// carrying a label + one Scale, and every twin must share
+    /// the same `ImageAdjust` — same `Input::SetAdjust` emitted
+    /// on drag, same value after `sync_scales` — so the two UIs
+    /// can never diverge.
+    ///
+    /// NOT a `#[test]`: GTK can only init on one thread, so this
+    /// runs inside the single `crate::tests::gtk_ui_contracts`.
+    pub(crate) fn check() {
+        let emitted = Rc::new(std::cell::RefCell::new(Vec::<(AdjustKind, f64)>::new()));
+        let sink: Rc<dyn Fn(Input)> = {
+            let emitted = emitted.clone();
+            Rc::new(move |input| {
+                if let Input::SetAdjust(kind, value) = input {
+                    emitted.borrow_mut().push((kind, value));
+                }
+            })
+        };
+
+        // The same factory the app uses fills the declared box.
+        let pop_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let mut pop_scales = Vec::new();
+        AppModel::build_popover_rows(&pop_box, &sink, &mut pop_scales);
+
+        // Exactly two rows, in EXPLORE_ADJUST_KINDS order.
+        assert_eq!(AppModel::EXPLORE_ADJUST_KINDS.len(), 2);
+        assert_eq!(pop_scales.len(), 2);
+        assert_eq!(pop_scales[0].0, AdjustKind::Brightness);
+        assert_eq!(pop_scales[1].0, AdjustKind::Contrast);
+        let mut rows = Vec::new();
+        let mut child = pop_box.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            rows.push(c);
+        }
+        assert_eq!(rows.len(), 2);
+        for ((kind, scale), row) in pop_scales.iter().zip(&rows) {
+            let Some(row) = row.downcast_ref::<gtk::Box>() else {
+                panic!("row is a Box")
+            };
+            let label = row
+                .first_child()
+                .and_then(|w| w.downcast::<gtk::Label>().ok());
+            let Some(label) = label else {
+                panic!("row starts with a Label")
+            };
+            assert_eq!(label.label(), AppModel::adjust_label(*kind));
+            let twin = label
+                .next_sibling()
+                .and_then(|w| w.downcast::<gtk::Scale>().ok());
+            let Some(twin) = twin else {
+                panic!("row's second child is a Scale")
+            };
+            assert_eq!(&twin, scale);
+            // The row carries exactly the label and the scale.
+            assert_eq!(row.last_child(), Some(twin.upcast()));
+        }
+
+        // Shared state — model -> twins: a Bancada twin built by the
+        // same factory and the popover twin must move together.
+        let (_, bench_scale) = AppModel::adjust_row(AdjustKind::Brightness, &sink);
+        let mut all_scales = vec![(AdjustKind::Brightness, bench_scale.clone())];
+        all_scales.extend(pop_scales.iter().cloned());
+        let mut adjust = ImageAdjust::default();
+        adjust.set(AdjustKind::Brightness, 0.42);
+        AppModel::sync_scales(&adjust, &all_scales);
+        assert!((bench_scale.value() - 0.42).abs() < 1e-9);
+        assert!((pop_scales[0].1.value() - 0.42).abs() < 1e-9);
+
+        // Shared state — twins -> model: dragging either row emits
+        // the same SetAdjust input (one logical value, §6.11).
+        pop_scales[1].1.set_value(1.6);
+        assert!(
+            emitted
+                .borrow()
+                .iter()
+                .any(|(k, v)| *k == AdjustKind::Contrast && (*v - 1.6).abs() < 1e-9)
+        );
+        bench_scale.set_value(-0.5);
+        assert!(
+            emitted
+                .borrow()
+                .iter()
+                .any(|(k, v)| *k == AdjustKind::Brightness && (*v + 0.5).abs() < 1e-9)
+        );
     }
 }
