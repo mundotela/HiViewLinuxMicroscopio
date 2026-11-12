@@ -315,7 +315,7 @@ O microscópio **não expõe nenhum controle V4L2** (§2). Os ajustes são feito
 | Contraste | `videobalance.contrast` | 0 … 2,0 (padrão 1) |
 | Saturação | `videobalance.saturation` | 0 … 2,0 (padrão 1) |
 | Gama | `gamma.gamma` | 0,3 … 3,0 (padrão 1) |
-| Nitidez | `gaussianblur` com `sigma` **negativo** (gst-plugins-bad, `gaudieffects`; exige `videoconvert` para AYUV ao redor) | 0 … 100% (padrão 0, mapeado para sigma 0 … −2,0) |
+| Nitidez | `gaussianblur` com `sigma` **negativo** (gst-plugins-bad, `gaudieffects`; exige `videoconvert` para AYUV ao redor) | 0 … 100% (padrão 0, mapeado para sigma 0 … −0,39 — teto imposto pelo orçamento de CPU de §7, ver `docs/reports/M7.md` §9) |
 
 - As propriedades são alteradas **ao vivo**, sem reiniciar o pipeline.
 - Com todos os valores no padrão, o ramo de nitidez fica fora do pipeline (ou em passthrough), para não gastar CPU.
