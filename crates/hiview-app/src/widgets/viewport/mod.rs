@@ -154,3 +154,21 @@ impl Default for Viewport {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The viewport is the keyboard-focus anchor of the main window —
+    /// if `focusable` regresses, clicking the video stops restoring
+    /// single-key accelerators and the M6 focus bug comes back.
+    #[test]
+    fn viewport_is_focusable() {
+        if gtk::init().is_err() {
+            // No display in the test environment (CI/headless).
+            return;
+        }
+        let viewport = Viewport::new();
+        assert!(viewport.is_focusable());
+    }
+}

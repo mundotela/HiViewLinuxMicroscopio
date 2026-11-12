@@ -44,6 +44,11 @@ impl ObjectImpl for Viewport {
         let obj = self.obj();
         obj.set_hexpand(true);
         obj.set_vexpand(true);
+        // The viewport is the keyboard-focus anchor of the main
+        // window: while an editable (SpinButton, entry) holds focus,
+        // GTK routes bare letters into it and every single-key
+        // accelerator (G, C, M, F…) silently dies.
+        obj.set_focusable(true);
         self.install_gestures();
     }
 }
@@ -156,6 +161,9 @@ impl Viewport {
             #[weak]
             obj,
             move |_click, n_press, _x, _y| {
+                // Clicking the video always hands it the keyboard
+                // focus back from any editable it escaped to.
+                obj.grab_focus();
                 if n_press >= 2 {
                     obj.imp().toggle_fit_100();
                 }

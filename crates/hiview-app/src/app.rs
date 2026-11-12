@@ -1147,6 +1147,7 @@ impl AppModel {
         // Push the persisted overlay/mode state into the viewport — the
         // placeholder overlays stay `None` (hidden) until this runs.
         self.apply_overlays();
+        self.install_focus_return();
     }
 
     /// Syncs derived UI after a camera state change.
@@ -1695,6 +1696,60 @@ impl AppModel {
         });
     }
 
+    /// Keeps single-key accelerators alive by returning keyboard focus
+    /// to the viewport whenever it escaped into an editable widget —
+    /// while a SpinButton/entry holds focus, GTK routes bare letters
+    /// into it and `G`, `C`, `M`, `Space`… silently stop working.
+    fn install_focus_return(&self) {
+        fn is_editing(w: &gtk::Widget) -> bool {
+            w.is::<gtk::Editable>() || w.is::<gtk::TextView>()
+        }
+        // Enter inside an editable commits (bubble phase runs after the
+        // widget's own handling) and returns focus to the viewport.
+        let key = gtk::EventControllerKey::new();
+        key.connect_key_pressed({
+            let viewport = self.viewport.clone();
+            let window = self.window.clone();
+            move |_, key, _, _| {
+                if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
+                    let editing = GtkWindowExt::focus(&window).is_some_and(|f| is_editing(&f));
+                    if editing {
+                        viewport.grab_focus();
+                    }
+                }
+                glib::Propagation::Proceed
+            }
+        });
+        self.window.add_controller(key.clone());
+        // Focus inside an editable when the window reactivates (a
+        // dialog or the gallery closed) returns to the viewport.
+        self.window.connect_notify_local(Some("is-active"), {
+            let viewport = self.viewport.clone();
+            move |win, _| {
+                if !win.is_active() {
+                    return;
+                }
+                let stuck = GtkWindowExt::focus(win).is_some_and(|f| is_editing(&f));
+                if stuck {
+                    viewport.grab_focus();
+                }
+            }
+        });
+        // Pointer leaving the Bancada panel ends an edit session.
+        let motion = gtk::EventControllerMotion::new();
+        motion.connect_leave({
+            let viewport = self.viewport.clone();
+            let window = self.window.clone();
+            move |_| {
+                let stuck = GtkWindowExt::focus(&window).is_some_and(|f| is_editing(&f));
+                if stuck {
+                    viewport.grab_focus();
+                }
+            }
+        });
+        self.bench_sidebar.add_controller(motion);
+    }
+
     /// Builds and presents the preferences dialog (Fotos page).
     fn open_preferences(&mut self, sender: &ComponentSender<Self>) {
         let dialog = adw::PreferencesDialog::new();
@@ -1773,6 +1828,12 @@ impl AppModel {
 
         page.add(&group);
         dialog.add(&page);
+        dialog.connect_closed({
+            let viewport = self.viewport.clone();
+            move |_| {
+                viewport.grab_focus();
+            }
+        });
         dialog.present(Some(&self.window));
     }
 }
