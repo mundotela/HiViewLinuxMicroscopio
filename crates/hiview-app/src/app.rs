@@ -1799,6 +1799,9 @@ impl AppModel {
         scale.set_draw_value(true);
         scale.set_value_pos(gtk::PositionType::Right);
         scale.set_digits(digits_of(kind));
+        if kind == AdjustKind::Sharpen {
+            scale.set_format_value_func(|_, v| format!("{v:.0}%"));
+        }
         scale.set_hexpand(true);
         scale.connect_value_changed({
             let sender = sender.clone();
@@ -1830,13 +1833,7 @@ impl AppModel {
         widgets: &<Self as SimpleComponent>::Widgets,
         sender: &ComponentSender<Self>,
     ) {
-        let sharpen = hiview_capture::sharpen_available();
         for kind in ImageAdjust::KINDS {
-            // The sharpen control is hidden when the gaudieffects
-            // plugin is missing from the system (§6.11).
-            if kind == AdjustKind::Sharpen && !sharpen {
-                continue;
-            }
             let (row, scale) = Self::adjust_row(kind, sender);
             widgets.adjust_group.add(&row);
             self.adjust_sliders.push((kind, scale));

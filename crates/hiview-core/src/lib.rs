@@ -18,7 +18,7 @@ mod view;
 
 pub use adjust::{
     AdjustKind, BRIGHTNESS_RANGE, CONTRAST_RANGE, GAMMA_RANGE, ImageAdjust, SATURATION_RANGE,
-    SHARPEN_MAX_SIGMA, SHARPEN_RANGE, digits_of, range_of, step_of,
+    SHARPEN_RANGE, digits_of, range_of, step_of,
 };
 pub use config::{AppConfig, ConfigLoad, PhotoConfig, config_path, load_config, save_config};
 pub use devices::{KNOWN_MICROSCOPES, KnownMicroscope, is_known_microscope};
