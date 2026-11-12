@@ -12,6 +12,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::measure::{DraftView, Measurement};
 use crate::view::{Point, Size};
 
 /// Default grid spacing, in image pixels.
@@ -20,6 +21,13 @@ pub const DEFAULT_GRID_SPACING_PX: f64 = 40.0;
 pub const MIN_GRID_SPACING_PX: f64 = 5.0;
 /// Grid spacing bounds exposed in the side panel.
 pub const MAX_GRID_SPACING_PX: f64 = 200.0;
+/// Grid spacing bounds in millimetres (when a calibration is active).
+pub const MIN_GRID_SPACING_MM: f64 = 0.05;
+/// Grid spacing bounds in millimetres (when a calibration is active).
+pub const MAX_GRID_SPACING_MM: f64 = 10.0;
+/// Smallest effective spacing the renderer draws, in image pixels —
+/// keeps a degenerate mm value from flooding the frame with lines.
+pub const MIN_EFFECTIVE_SPACING_PX: f64 = 2.0;
 /// Default tick spacing of the scale crosshair, in image pixels.
 pub const DEFAULT_TICK_SPACING_PX: f64 = 10.0;
 /// Default grid line opacity (60%).
@@ -107,15 +115,18 @@ impl Default for OverlayColor {
     }
 }
 
-/// Grid spacing unit (docs/ARCHITECTURE.md §6.9). M6 only supports image
-/// pixels; M8 adds the `Millimeters` variant once a calibration profile
-/// supplies `px_per_mm` — the panel then feeds the active calibration
-/// into [`GridSpacing::pixels`].
+/// Grid spacing unit (docs/ARCHITECTURE.md §6.9): image pixels, or
+/// millimetres resolved through the active calibration's `px_per_mm`.
+/// The side panel edits `Millimeters` while a calibration is active and
+/// `Pixels` otherwise; a `Millimeters` value rendered without a
+/// calibration falls back to [`DEFAULT_GRID_SPACING_PX`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "unit", content = "value", rename_all = "lowercase")]
 pub enum GridSpacing {
     /// Spacing in image pixels.
     Pixels(f64),
+    /// Spacing in millimetres — needs an active calibration to resolve.
+    Millimeters(f64),
 }
 
 impl Default for GridSpacing {
@@ -125,12 +136,35 @@ impl Default for GridSpacing {
 }
 
 impl GridSpacing {
-    /// Spacing in image pixels. `px_per_mm` is the active calibration —
-    /// unused until M8 adds the millimeter unit.
+    /// Spacing in image pixels. `px_per_mm` is the active calibration;
+    /// without it a millimetre spacing falls back to the px default, and
+    /// every resolved value is clamped to [`MIN_EFFECTIVE_SPACING_PX`]
+    /// so degenerate inputs cannot flood the renderer with lines.
     #[must_use]
-    pub fn pixels(&self, _px_per_mm: Option<f64>) -> f64 {
-        match self {
+    pub fn pixels(&self, px_per_mm: Option<f64>) -> f64 {
+        let px = match self {
             Self::Pixels(px) => *px,
+            Self::Millimeters(mm) => px_per_mm.map_or(DEFAULT_GRID_SPACING_PX, |s| mm * s),
+        };
+        px.max(MIN_EFFECTIVE_SPACING_PX)
+    }
+
+    /// Re-expresses the spacing after the calibration state changed
+    /// (`old` → `new` px/mm), keeping the same *visual* spacing:
+    /// px values become millimetres when a calibration arrives, and
+    /// millimetre values become pixels when it leaves. Same-unit and
+    /// calibration-to-calibration values are untouched.
+    #[must_use]
+    pub fn rekeyed(&self, old: Option<f64>, new: Option<f64>) -> Self {
+        match (self, old, new) {
+            (Self::Pixels(px), _, Some(ppm)) if *px > 0.0 => Self::Millimeters(px / ppm),
+            (Self::Millimeters(mm), Some(old_ppm), None) => {
+                Self::Pixels((mm * old_ppm).clamp(MIN_GRID_SPACING_PX, MAX_GRID_SPACING_PX))
+            }
+            // A millimetre value with no calibration to translate it:
+            // the same fallback `pixels()` uses.
+            (Self::Millimeters(_), None, None) => Self::Pixels(DEFAULT_GRID_SPACING_PX),
+            _ => *self,
         }
     }
 }
@@ -169,8 +203,9 @@ pub enum CrosshairStyle {
     Cross,
     /// Cross plus a circle of [`CROSSHAIR_CIRCLE_FRACTION`] radius.
     Circle,
-    /// Cross plus scale ticks every
-    /// [`CrosshairConfig::tick_spacing_px`] image pixels.
+    /// Cross plus scale ticks every [`CrosshairConfig::tick_spacing`]
+    /// (image pixels, or calibrated millimetres while a profile is
+    /// active).
     Ticks,
 }
 
@@ -184,9 +219,10 @@ pub struct CrosshairConfig {
     pub style: CrosshairStyle,
     /// Line color.
     pub color: OverlayColor,
-    /// Tick spacing for [`CrosshairStyle::Ticks`], in image pixels (M8
-    /// turns this into calibrated millimeters).
-    pub tick_spacing_px: f64,
+    /// Tick spacing for [`CrosshairStyle::Ticks`] — image pixels, or
+    /// calibrated millimetres while a profile is active (M8). The old
+    /// `tick_spacing_px` float key is simply ignored on load.
+    pub tick_spacing: GridSpacing,
 }
 
 impl Default for CrosshairConfig {
@@ -195,9 +231,22 @@ impl Default for CrosshairConfig {
             enabled: false,
             style: CrosshairStyle::default(),
             color: OverlayColor::YELLOW,
-            tick_spacing_px: DEFAULT_TICK_SPACING_PX,
+            tick_spacing: GridSpacing::Pixels(DEFAULT_TICK_SPACING_PX),
         }
     }
+}
+
+/// Transient measurement layer drawn by the renderer — session data,
+/// **never persisted** (`serde(skip)`): the list is empty on restart.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeasureOverlay {
+    /// px/mm of the active calibration profile — drives the µm/mm
+    /// labels and the millimetre grid/tick spacing. `None` → pixels.
+    pub px_per_mm: Option<f64>,
+    /// Committed measurements in image coordinates.
+    pub items: Vec<Measurement>,
+    /// The in-progress draft (rubber band), if any.
+    pub draft: Option<DraftView>,
 }
 
 /// All overlay settings, persisted in `config.toml` (`[overlays]`).
@@ -208,6 +257,9 @@ pub struct OverlayState {
     pub grid: GridConfig,
     /// Crosshair overlay.
     pub crosshair: CrosshairConfig,
+    /// Measurements drawn over the frame (M8) — session-only.
+    #[serde(skip)]
+    pub measure: MeasureOverlay,
 }
 
 /// The overlays to actually draw in `mode` (docs/ARCHITECTURE.md §1):
@@ -215,7 +267,11 @@ pub struct OverlayState {
 /// a copy of `state`, so switching modes never loses settings.
 #[must_use]
 pub fn overlays_for(mode: AppMode, state: &OverlayState) -> Option<OverlayState> {
-    if mode == AppMode::Bench && (state.grid.enabled || state.crosshair.enabled) {
+    let drawn = state.grid.enabled
+        || state.crosshair.enabled
+        || !state.measure.items.is_empty()
+        || state.measure.draft.is_some();
+    if mode == AppMode::Bench && drawn {
         Some(state.clone())
     } else {
         None
@@ -282,6 +338,91 @@ mod tests {
     fn bench_with_everything_off_draws_nothing() {
         let state = OverlayState::default();
         assert_eq!(overlays_for(AppMode::Bench, &state), None);
+    }
+
+    /// Measurements draw even with grid and crosshair off — and are
+    /// still hidden in Explorar (the mode stays clean, §1).
+    #[test]
+    fn measurements_draw_in_bench_only() {
+        let mut state = OverlayState::default();
+        assert_eq!(overlays_for(AppMode::Bench, &state), None);
+        state.measure.items.push(crate::measure::Measurement {
+            id: 1,
+            tool: crate::measure::MeasureTool::Ruler,
+            shape: crate::measure::MeasureShape::Line {
+                a: Point::new(0.0, 0.0),
+                b: Point::new(10.0, 0.0),
+            },
+        });
+        assert_eq!(overlays_for(AppMode::Bench, &state), Some(state.clone()));
+        assert_eq!(overlays_for(AppMode::Explore, &state), None);
+    }
+
+    /// The measurement layer is session data: it must not survive a
+    /// config round-trip (serde skip → default on load).
+    #[test]
+    fn measurements_are_never_persisted() {
+        let mut state = OverlayState::default();
+        state.measure.px_per_mm = Some(89.0);
+        state.measure.items.push(crate::measure::Measurement {
+            id: 1,
+            tool: crate::measure::MeasureTool::Ruler,
+            shape: crate::measure::MeasureShape::Circle {
+                center: Point::new(1.0, 1.0),
+                edge: Point::new(2.0, 1.0),
+            },
+        });
+        let text = toml::to_string(&state).unwrap_or_else(|e| panic!("ser: {e}"));
+        assert!(!text.contains("px_per_mm"));
+        let back: OverlayState = toml::from_str(&text).unwrap_or_else(|e| panic!("de: {e}"));
+        assert!(back.measure.items.is_empty());
+        assert_eq!(back.measure.px_per_mm, None);
+    }
+
+    #[test]
+    fn millimeters_resolve_through_the_calibration() {
+        // 1 mm grid at the fixture's 89 px/mm → lines every 89 px.
+        assert_eq!(GridSpacing::Millimeters(1.0).pixels(Some(89.0)), 89.0);
+        assert_eq!(GridSpacing::Millimeters(0.5).pixels(Some(89.0)), 44.5);
+        // No calibration → px fallback.
+        assert_eq!(
+            GridSpacing::Millimeters(1.0).pixels(None),
+            DEFAULT_GRID_SPACING_PX
+        );
+        // Degenerate mm values cannot flood the frame with lines.
+        assert_eq!(
+            GridSpacing::Millimeters(0.000_001).pixels(Some(89.0)),
+            MIN_EFFECTIVE_SPACING_PX
+        );
+    }
+
+    /// `rekeyed` keeps the *visual* spacing when the calibration state
+    /// changes: px → mm on activation, mm → px on deactivation.
+    #[test]
+    fn spacing_rekeys_on_calibration_change() {
+        // 44.5 px at 89 px/mm becomes 0.5 mm when a profile activates.
+        assert_eq!(
+            GridSpacing::Pixels(44.5).rekeyed(None, Some(89.0)),
+            GridSpacing::Millimeters(0.5)
+        );
+        // …and 0.5 mm becomes 44.5 px when it is cleared (clamped to
+        // the px bounds).
+        assert_eq!(
+            GridSpacing::Millimeters(0.5).rekeyed(Some(89.0), None),
+            GridSpacing::Pixels(44.5)
+        );
+        // Millimetre values survive a profile *switch* (the mm is the
+        // user's intent — the line positions just move).
+        assert_eq!(
+            GridSpacing::Millimeters(0.5).rekeyed(Some(89.0), Some(120.0)),
+            GridSpacing::Millimeters(0.5)
+        );
+        // A hand-edited mm value with no calibration at all falls back
+        // to the px default.
+        assert_eq!(
+            GridSpacing::Millimeters(0.5).rekeyed(None, None),
+            GridSpacing::Pixels(DEFAULT_GRID_SPACING_PX)
+        );
     }
 
     #[test]

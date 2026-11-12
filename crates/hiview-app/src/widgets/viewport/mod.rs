@@ -17,7 +17,7 @@ use gtk::prelude::*;
 use gtk::subclass::prelude::ObjectSubclassIsExt;
 
 use hiview_capture::Frame;
-use hiview_core::{OverlayState, Size, ViewTransform};
+use hiview_core::{MeasureGesture, MeasureTool, OverlayState, Size, ViewTransform};
 
 glib::wrapper! {
     /// Widget that renders camera frames with a view transform.
@@ -134,6 +134,42 @@ impl Viewport {
     pub fn set_overlays(&self, overlays: Option<OverlayState>) {
         self.imp().overlays.replace(overlays);
         self.queue_draw();
+    }
+
+    /// Arms a measurement tool (§6.9, Bancada only) or `None` to
+    /// disarm. While armed, primary clicks/drags measure and panning
+    /// moves to the middle button; wheel zoom keeps working. With no
+    /// tool, the original gestures apply unchanged.
+    pub fn set_measure_tool(&self, tool: Option<MeasureTool>) {
+        let imp = self.imp();
+        imp.measure_tool.set(tool);
+        if let Some(pan) = imp.pan_gesture.borrow().as_ref() {
+            pan.set_button(if tool.is_some() {
+                gdk::BUTTON_MIDDLE
+            } else {
+                gdk::BUTTON_PRIMARY
+            });
+        }
+    }
+
+    /// The armed measurement tool, if any (for tests/debug).
+    #[must_use]
+    pub fn measure_tool(&self) -> Option<MeasureTool> {
+        self.imp().measure_tool.get()
+    }
+
+    /// Registers the sink receiving measurement gestures converted to
+    /// image coordinates (§6.9). The app wires this to its input
+    /// sender once at startup.
+    pub fn set_measure_handler(&self, sink: impl Fn(MeasureGesture) + 'static) {
+        self.imp().measure_sink.replace(Some(Box::new(sink)));
+    }
+
+    /// The displayed frame size in image pixels — the coordinate space
+    /// measurements and overlays live in (§6.9).
+    #[must_use]
+    pub fn frame_size(&self) -> Size {
+        self.imp().frame_size.get()
     }
 
     /// Current transform, for tests/debug.

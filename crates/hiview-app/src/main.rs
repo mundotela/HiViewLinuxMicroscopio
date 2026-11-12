@@ -10,6 +10,8 @@ mod app;
 mod cli;
 mod components;
 mod focus;
+mod measure_dialogs;
+mod measure_ui;
 mod overlay;
 mod services;
 mod strings;
@@ -65,5 +67,6 @@ mod tests {
         crate::focus::tests::check();
         crate::widgets::viewport::tests::check();
         crate::app::tests::check();
+        crate::measure_ui::tests::check();
     }
 }

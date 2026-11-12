@@ -260,7 +260,7 @@ appsrc name=src is-live=true format=time caps=video/x-raw,format=RGBA,width=W,he
   2. Desenha uma linha sobre ela e informa a distância real (em mm).
   3. O app calcula `px_por_mm` e salva um **perfil nomeado** (ex.: "Anel no máximo").
 - **Incerteza exibida:** ±1 px convertido para µm. A 640×480 isso é relevante e precisa aparecer.
-- **Aviso permanente** no modo Bancada quando há calibração ativa: "Válida apenas se o anel de ampliação e a altura não mudaram desde a calibração".
+- **Aviso permanente** no modo Bancada quando há calibração ativa: "Calibração válida apenas se o anel de ampliação e a altura não mudaram desde a calibração."
 - Pressupõe pixels quadrados. Isso é verificado no teste de aceitação do M8 (medida horizontal × vertical da cruz da lâmina, diferença < 2%).
 
 ### 6.10 Subsistema do botão físico

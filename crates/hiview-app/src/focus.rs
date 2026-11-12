@@ -37,6 +37,34 @@ fn is_editing(widget: &gtk::Widget) -> bool {
     widget.is::<gtk::Editable>() || widget.is::<gtk::TextView>() || widget.is::<gtk::Range>()
 }
 
+/// Whether `widget` or one of its ancestors is a text input — entries,
+/// spin buttons and text views. Single-key accelerators must NEVER
+/// fire while one of these holds focus: a typed "g" is text, not the
+/// grid shortcut (CONVENTIONS §7, M8 round-2 finding).
+pub(crate) fn in_text_input(widget: &gtk::Widget) -> bool {
+    let mut current = Some(widget.clone());
+    while let Some(w) = current {
+        if w.is::<gtk::Editable>() || w.is::<gtk::TextView>() {
+            return true;
+        }
+        current = w.parent();
+    }
+    false
+}
+
+/// The single-key shortcut gate (§13): bare letters and digits may
+/// only reach the `win.*` actions when the window itself owns the
+/// interaction — no `adw::Dialog` open, no text input focused.
+/// The application-level `set_accelerators_for_action` API cannot do
+/// this check, which is why shortcuts live in a window
+/// `EventControllerKey` instead.
+pub(crate) fn shortcuts_allowed(window: &adw::ApplicationWindow) -> bool {
+    if adw::prelude::AdwApplicationWindowExt::visible_dialog(window).is_some() {
+        return false;
+    }
+    GtkWindowExt::focus(window).is_none_or(|f| !in_text_input(&f))
+}
+
 /// Window-level focus returns, installed once at startup:
 ///
 /// - Enter inside an editable commits (bubble phase runs after the
@@ -118,6 +146,22 @@ pub fn watch_popover_slot(popover: &gtk::Popover, target: Slot) {
 pub(crate) mod tests {
     use super::*;
 
+    /// `present()` only queues the map and signal delivery is async —
+    /// pump the main loop so the window is a real `GtkRoot` and
+    /// `closed` handlers have run before focus assertions touch them.
+    fn realize(window: &gtk::Window) {
+        let ctx = glib::MainContext::default();
+        for _ in 0..200 {
+            if window.is_realized() {
+                break;
+            }
+            ctx.iteration(false);
+        }
+        for _ in 0..50 {
+            ctx.iteration(false);
+        }
+    }
+
     /// The whole contract: the "stuck" classification drives the rescue
     /// paths (editables, text views and sliders per CONVENTIONS §7), and
     /// a `closed` signal on a popover or an `adw::Dialog` must land
@@ -142,18 +186,74 @@ pub(crate) mod tests {
         assert!(!is_editing(&gtk::Button::new().upcast::<gtk::Widget>()));
         assert!(!is_editing(&gtk::Label::new(None).upcast::<gtk::Widget>()));
 
+        // Text-input detection walks ancestors — the focused widget is
+        // the entry itself (EntryRow's inner text is still `Editable`).
+        assert!(in_text_input(&gtk::Entry::new().upcast::<gtk::Widget>()));
+        assert!(in_text_input(
+            &gtk::SpinButton::with_range(0.0, 10.0, 1.0).upcast::<gtk::Widget>()
+        ));
+        let box_ = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let entry = gtk::Entry::new();
+        box_.append(&entry);
+        assert!(in_text_input(&entry.upcast::<gtk::Widget>()));
+        assert!(!in_text_input(
+            &gtk::Label::new(None).upcast::<gtk::Widget>()
+        ));
+        assert!(!in_text_input(&gtk::Button::new().upcast::<gtk::Widget>()));
+
+        // The §13 gate's editable half, exercised on a REALIZED window
+        // (an `adw::ApplicationWindow` can't exist without a running
+        // GApplication — the critical-free env forbids it). The focus
+        // half of `shortcuts_allowed` is this exact expression.
         let window = gtk::Window::new();
+        let box2 = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let entry2 = gtk::Entry::new();
+        let btn = gtk::Button::new();
+        box2.append(&entry2);
+        box2.append(&btn);
+        window.set_child(Some(&box2));
+        window.present();
+        realize(&window);
+        entry2.grab_focus();
+        let text_focused = || GtkWindowExt::focus(&window).is_some_and(|f| in_text_input(&f));
+        assert!(text_focused(), "entry holds focus after grab_focus");
+        btn.grab_focus();
+        assert!(
+            !text_focused(),
+            "a plain widget is not a text input — shortcuts allowed"
+        );
+        window.close();
+
+        // `closed` must come from REAL presented widgets — emitting it
+        // on an unrooted popover/dialog makes GTK's own closed handler
+        // call gtk_root_get_focus on a non-root (Gtk-CRITICAL). An
+        // `adw::Window` can exist without a running GApplication.
+        let window = adw::Window::new();
+        let box3 = gtk::Box::new(gtk::Orientation::Vertical, 0);
         let target = gtk::Button::new();
-        window.set_child(Some(&target));
+        box3.append(&target);
+        adw::prelude::AdwWindowExt::set_content(&window, Some(&box3));
+        window.present();
+        realize(window.upcast_ref::<gtk::Window>());
 
         let popover = gtk::Popover::new();
+        popover.set_parent(&target);
         watch_popover(&popover, &target);
-        popover.emit_by_name::<()>("closed", &[]);
+        popover.popup();
+        popover.popdown();
+        realize(window.upcast_ref::<gtk::Window>());
         assert_eq!(
             GtkWindowExt::focus(&window).as_ref(),
             Some(target.upcast_ref::<gtk::Widget>())
         );
 
+        // AdwDialog's `closed` internally calls gtk_root_get_focus on
+        // the dialog itself — a widget, never a GtkRoot — so ANY emit
+        // (rooted or not) logs one Gtk-CRITICAL, and a real close()
+        // doesn't emit at all on a headless dialog. Emit on the
+        // unrooted dialog anyway: it costs the same single internal
+        // critical while keeping the focus assertion that proves the
+        // contract.
         let dialog = adw::Dialog::new();
         watch_dialog(&dialog, &target);
         dialog.emit_by_name::<()>("closed", &[]);
@@ -161,5 +261,6 @@ pub(crate) mod tests {
             GtkWindowExt::focus(&window).as_ref(),
             Some(target.upcast_ref::<gtk::Widget>())
         );
+        window.close();
     }
 }

@@ -122,6 +122,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - **Nunca segure um `borrow` de `RefCell`/`Mutex` durante uma chamada ao GTK ou ao GStreamer.** Copie o que precisa, solte o borrow e só então chame. O GTK pode reentrar no nosso código pela mesma pilha, e um pânico dentro de um callback do GTK não se recupera: o app **aborta** (crash do M5). Em callbacks de factory (`setup`/`bind`/`unbind`/`teardown`), use `try_borrow` e adie com `glib::idle_add_local_once` em vez de entrar em pânico.
 - **Widgets reciclados (`GridView`/`ListView`):** nunca guarde referência a um widget de item, nem pendure popover ou diálogo nele. Resolva o item pelo **dado do modelo** (ex.: o caminho do arquivo) no momento da ação, e apresente diálogos na janela. Widgets de item não devem ser alvo do ponteiro (`can_target=false`): o GTK 4.14 tem um bug com widgets desparentados sob o cursor (`Gtk-CRITICAL gtk_widget_compute_point`). Gestos e menus ficam na grade, que é permanente.
 - **Threads externas → UI:** callbacks de worker ou de GStreamer enviam mensagens com `input_sender().send(...)`, **descartando o erro**. Nunca use `sender.input(...)` nesses callbacks: ele entra em pânico se a UI já foi encerrada (bug encontrado no M6, presente desde o M2, que aparecia ao fechar o app com a câmera transmitindo).
+- **`adw::ComboRow`/`GtkDropDown` cicla `selected` na roda do mouse:** rolar o painel sobre uma combo reescreve configuração silenciosamente. Toda combo leva um `EventControllerScroll` em capture que engole a roda (`measure_ui::swallow_scroll`).
 - **Foco do teclado:** os atalhos de uma tecla (G, C, M, Espaço…) não funcionam enquanto um campo editável tem o foco. Depois de qualquer diálogo ou popover fechar, ou quando o usuário termina de editar um campo (Enter ou ponteiro saindo do painel), o foco volta para a viewport. Clicar no vídeo sempre devolve o foco à viewport. Botões que não precisam de foco (seletores de modo, Galeria) usam `focusable=false`.
 - **Critério de aceite de UI:** zero linhas `Gtk-CRITICAL`, `Gdk-CRITICAL` ou `panicked` no log de uma sessão completa de uso.
 
@@ -132,7 +133,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - Cada componente: `struct Model`, `enum Input`, `enum Output`, `enum CommandOutput` (se houver), e `view!` declarativo.
 - Estado da UI **só** no `Model`. Widgets não guardam estado próprio (exceto o `Viewport`, que é uma subclasse GTK com estado de renderização).
 - Mensagens no imperativo e específicas: `Input::TakePhoto`, `Input::ToggleFreeze`, `Input::SetZoom(f64)`. Evite nomes como `Input::Update`.
-- Atalhos de teclado registrados via `relm4::actions` com accelerators no nível da aplicação, e listados na janela de atalhos.
+- Atalhos de teclado: ações `win.*` via `relm4::actions`, disparados por um `EventControllerKey` (fase capture) na janela — **nunca** `set_accelerators_for_action` no nível da aplicação, que dispara dentro de diálogos e engole teclas destinadas a campos de texto. O mapa tecla→ação é a função `shortcut_action` (fonte única da §13) e o gate `focus::shortcuts_allowed` bloqueia tudo com diálogo aberto ou campo editável focado.
 - O componente raiz **não** contém lógica de domínio: ele delega a serviços e subcomponentes.
 
 ---
@@ -203,7 +204,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 | `F` | Congelar/descongelar |
 | `G` | Grade |
 | `C` | Mira |
-| `L` | Régua (Bancada) |
+| `L` / `A` / `O` | Régua / ângulo / círculo (Bancada) |
 | `H` / `V` | Espelhar horizontal / vertical |
 | `[` / `]` | Girar −90° / +90° |
 | `+` / `-` | Zoom |

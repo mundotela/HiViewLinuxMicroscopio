@@ -207,6 +207,8 @@ pub fn encode_photo(
 ///
 /// `apply` runs on the output-resolution image right before encoding —
 /// the app uses it to burn overlays into the photo (§6.6, M6).
+/// `png_text` is spliced into PNG output as `tEXt` chunks (M8: active
+/// calibration, mirror/rotation, app version); JPEG ignores it.
 // One argument over the lint budget: the frame fields mirror `save_photo`,
 // which is already at the limit.
 #[allow(clippy::too_many_arguments)]
@@ -219,12 +221,16 @@ pub fn save_photo_with(
     format: PhotoFormat,
     dir: &Path,
     apply: impl FnOnce(&mut RgbaImage),
+    png_text: &[(String, String)],
 ) -> Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let path = unique_photo_path(dir, &photo_filename(Local::now(), format));
     let mut image = render_photo(data, width, height, stride, resolution)?;
     apply(&mut image);
-    let encoded = encode_image(&image, format)?;
+    let mut encoded = encode_image(&image, format)?;
+    if format == PhotoFormat::Png && !png_text.is_empty() {
+        encoded = crate::pngmeta::inject_png_text(&encoded, png_text);
+    }
     fs::write(&path, encoded)?;
     Ok(path)
 }
@@ -239,7 +245,17 @@ pub fn save_photo(
     format: PhotoFormat,
     dir: &Path,
 ) -> Result<PathBuf> {
-    save_photo_with(data, width, height, stride, resolution, format, dir, |_| {})
+    save_photo_with(
+        data,
+        width,
+        height,
+        stride,
+        resolution,
+        format,
+        dir,
+        |_| {},
+        &[],
+    )
 }
 
 #[cfg(test)]
@@ -380,6 +396,65 @@ mod tests {
             .unwrap_or_else(|e| panic!("decode: {e}"))
             .into_rgba8();
         assert_eq!(decoded.as_raw(), src.as_raw());
+    }
+
+    /// PNG photos carry the provenance `tEXt` chunks the app builds
+    /// (§6.6, M8): calibration, mirror/rotation, app version.
+    #[test]
+    fn saved_png_carries_text_metadata() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let data = vec![64u8; 8 * 8 * 4];
+        let meta = vec![
+            ("Software".to_string(), "HiView 0.1.0".to_string()),
+            ("Mirror".to_string(), "H".to_string()),
+            ("Rotation".to_string(), "90 deg CW".to_string()),
+            ("Calibration".to_string(), "Anel 4×".to_string()),
+            ("Calibration px/mm".to_string(), "89.123".to_string()),
+        ];
+        let path = save_photo_with(
+            &data,
+            8,
+            8,
+            32,
+            PhotoResolution::Native,
+            PhotoFormat::Png,
+            dir.path(),
+            |_| {},
+            &meta,
+        )
+        .unwrap_or_else(|e| panic!("save: {e}"));
+        let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read: {e}"));
+        // The file must still be a valid PNG.
+        image::load_from_memory(&bytes).unwrap_or_else(|e| panic!("decode: {e}"));
+        let found = crate::pngmeta::extract_png_text(&bytes);
+        for (k, v) in &meta {
+            assert!(
+                found.iter().any(|(fk, fv)| fk == k && fv == v),
+                "missing {k}={v}: {found:?}"
+            );
+        }
+    }
+
+    /// JPEG output carries no metadata (out of scope — report §9).
+    #[test]
+    fn jpeg_output_ignores_text_metadata() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let data = vec![64u8; 8 * 8 * 4];
+        let path = save_photo_with(
+            &data,
+            8,
+            8,
+            32,
+            PhotoResolution::Native,
+            PhotoFormat::Jpeg,
+            dir.path(),
+            |_| {},
+            &[("Calibration".to_string(), "x".to_string())],
+        )
+        .unwrap_or_else(|e| panic!("save: {e}"));
+        let bytes = fs::read(&path).unwrap_or_else(|e| panic!("read: {e}"));
+        image::load_from_memory(&bytes).unwrap_or_else(|e| panic!("decode: {e}"));
+        assert!(crate::pngmeta::extract_png_text(&bytes).is_empty());
     }
 
     #[test]

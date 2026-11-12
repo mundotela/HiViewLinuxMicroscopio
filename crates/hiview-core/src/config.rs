@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::adjust::ImageAdjust;
 use crate::error::Result;
 use crate::imaging::{PhotoFormat, PhotoResolution};
+use crate::measure::CalibrationProfile;
 use crate::overlay::{AppMode, OverlayState};
 
 /// Top-level application configuration (§6.12).
@@ -32,6 +33,13 @@ pub struct AppConfig {
     /// stable id for non-USB cameras; `"test"`/`"file"` for the fixed
     /// CLI sources). Serialized as `[devices."05e3:f12a"]` (§6.12).
     pub devices: BTreeMap<String, ImageAdjust>,
+    /// Named calibration profiles, serialized as `[[calibration]]`
+    /// (§6.12).
+    pub calibration: Vec<CalibrationProfile>,
+    /// Name of the profile whose `px_per_mm` converts measurements
+    /// (`active_calibration = "Anel no máximo"`); `None` → results in
+    /// pixels.
+    pub active_calibration: Option<String>,
 }
 
 impl AppConfig {
@@ -48,6 +56,37 @@ impl AppConfig {
             self.devices.remove(key);
         } else {
             self.devices.insert(key.to_string(), adjust.clamped());
+        }
+    }
+
+    /// The active calibration profile, resolved by name. A dangling
+    /// `active_calibration` (hand-edited or a deleted profile) behaves
+    /// like no calibration — results in pixels (§6.9).
+    #[must_use]
+    pub fn active_profile(&self) -> Option<&CalibrationProfile> {
+        self.active_calibration
+            .as_deref()
+            .and_then(|name| self.calibration.iter().find(|p| p.name == name))
+    }
+
+    /// Adds or replaces a profile and makes it active. Names are the
+    /// identity — same-name entries are overwritten so the combo never
+    /// shows duplicates.
+    pub fn upsert_profile(&mut self, profile: CalibrationProfile) {
+        if let Some(existing) = self.calibration.iter_mut().find(|p| p.name == profile.name) {
+            *existing = profile.clone();
+        } else {
+            self.calibration.push(profile.clone());
+        }
+        self.active_calibration = Some(profile.name);
+    }
+
+    /// Removes the named profile; clears `active_calibration` when it
+    /// was the active one.
+    pub fn remove_profile(&mut self, name: &str) {
+        self.calibration.retain(|p| p.name != name);
+        if self.active_calibration.as_deref() == Some(name) {
+            self.active_calibration = None;
         }
     }
 }
@@ -161,7 +200,7 @@ mod tests {
         config.overlays.crosshair.enabled = true;
         config.overlays.crosshair.style = crate::overlay::CrosshairStyle::Ticks;
         config.overlays.crosshair.color = crate::overlay::OverlayColor::WHITE;
-        config.overlays.crosshair.tick_spacing_px = 7.5;
+        config.overlays.crosshair.tick_spacing = crate::overlay::GridSpacing::Pixels(7.5);
         config.set_adjust_for(
             "05e3:f12a",
             crate::adjust::ImageAdjust {
@@ -234,6 +273,127 @@ mod tests {
         assert_eq!(config.adjust_for("05e3:f12a"), tuned);
         config.set_adjust_for("05e3:f12a", crate::adjust::ImageAdjust::default());
         assert!(!config.devices.contains_key("05e3:f12a"));
+    }
+
+    /// §6.12: calibration profiles live under `[[calibration]]` and the
+    /// active one under `active_calibration` — full CRUD round-trip.
+    #[test]
+    fn calibration_profiles_round_trip() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let path = dir.path().join("config.toml");
+        let mut config = AppConfig::default();
+        config.upsert_profile(crate::measure::CalibrationProfile {
+            name: "Anel no máximo".into(),
+            px_per_mm: 89.0,
+        });
+        config.upsert_profile(crate::measure::CalibrationProfile {
+            name: "Anel no mínimo".into(),
+            px_per_mm: 31.5,
+        });
+        config.active_calibration = Some("Anel no máximo".into());
+        save_config(&config, &path).unwrap_or_else(|e| panic!("save: {e}"));
+
+        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read: {e}"));
+        assert!(
+            text.contains("[[calibration]]"),
+            "expected a [[calibration]] section, got:\n{text}"
+        );
+        assert!(text.contains("active_calibration"));
+
+        match load_config(&path) {
+            ConfigLoad::Loaded(loaded) => {
+                assert_eq!(loaded, config);
+                let active = loaded
+                    .active_profile()
+                    .unwrap_or_else(|| panic!("active profile"));
+                assert_eq!(active.name, "Anel no máximo");
+                assert!((active.px_per_mm - 89.0).abs() < 1e-9);
+            }
+            _ => panic!("expected Loaded"),
+        }
+    }
+
+    /// The wizard flow end-to-end at the domain level (§6.9): a
+    /// Calibrate drag commits a `CalibrationLine` — the line becomes
+    /// a profile that is upserted, persisted and active after reload.
+    /// Regression for the "Criar perfil creates nothing" report.
+    #[test]
+    fn wizard_create_persists_and_activates() {
+        use crate::measure::{MeasureGesture, MeasureSet, MeasureTool};
+
+        let mut set = MeasureSet::default();
+        set.arm(Some(MeasureTool::Calibrate));
+        let commit = set.gesture(MeasureGesture::DragStart(crate::view::Point::new(0.0, 0.0)));
+        assert!(matches!(commit, crate::measure::MeasureCommit::Nothing));
+        let commit = set.gesture(MeasureGesture::DragEnd(crate::view::Point::new(188.0, 0.0)));
+        let crate::measure::MeasureCommit::CalibrationLine { a, b } = commit else {
+            panic!("expected CalibrationLine");
+        };
+
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let path = dir.path().join("config.toml");
+        let mut config = AppConfig::default();
+        let profile = crate::measure::CalibrationProfile::from_line(a, b, 1.0, "Lâmina".into())
+            .unwrap_or_else(|| panic!("line is valid"));
+        config.upsert_profile(profile);
+        save_config(&config, &path).unwrap_or_else(|e| panic!("save: {e}"));
+
+        // `active_calibration` must be a ROOT key — emitted before the
+        // `[[calibration]]` array, never nested inside a profile.
+        let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read: {e}"));
+        let active_pos = text
+            .find("active_calibration")
+            .unwrap_or_else(|| panic!("active_calibration written: {text}"));
+        let table_pos = text
+            .find("[[calibration]]")
+            .unwrap_or_else(|| panic!("[[calibration]] written: {text}"));
+        assert!(active_pos < table_pos, "root key before the array: {text}");
+
+        match load_config(&path) {
+            ConfigLoad::Loaded(loaded) => {
+                let active = loaded
+                    .active_profile()
+                    .unwrap_or_else(|| panic!("the new profile is active"));
+                assert_eq!(active.name, "Lâmina");
+                assert!((active.px_per_mm - 188.0).abs() < 1e-9);
+            }
+            _ => panic!("expected Loaded"),
+        }
+    }
+
+    /// The same-name upsert edits in place (the combo never lists
+    /// duplicates), and removing the active profile clears the pointer.
+    #[test]
+    fn profile_upsert_and_remove() {
+        let mut config = AppConfig::default();
+        config.upsert_profile(crate::measure::CalibrationProfile {
+            name: "a".into(),
+            px_per_mm: 10.0,
+        });
+        config.upsert_profile(crate::measure::CalibrationProfile {
+            name: "a".into(),
+            px_per_mm: 20.0,
+        });
+        assert_eq!(config.calibration.len(), 1);
+        assert_eq!(config.active_profile().map(|p| p.px_per_mm), Some(20.0));
+
+        config.remove_profile("a");
+        assert!(config.calibration.is_empty());
+        assert!(config.active_profile().is_none());
+        assert_eq!(config.active_calibration, None);
+        // Removing an absent profile touches nothing.
+        config.remove_profile("ghost");
+    }
+
+    /// A dangling `active_calibration` name (hand-edited file, deleted
+    /// profile) resolves to no calibration — pixel results, no crash.
+    #[test]
+    fn dangling_active_name_is_no_calibration() {
+        let config = AppConfig {
+            active_calibration: Some("gone".into()),
+            ..AppConfig::default()
+        };
+        assert!(config.active_profile().is_none());
     }
 
     #[test]

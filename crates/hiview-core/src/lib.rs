@@ -13,8 +13,10 @@ mod error;
 mod gallery;
 mod image_adjust;
 mod imaging;
+mod measure;
 mod orientation;
 mod overlay;
+mod pngmeta;
 mod view;
 
 pub use adjust::{
@@ -34,11 +36,18 @@ pub use imaging::{
     JPEG_QUALITY, PhotoFormat, PhotoResolution, encode_image, encode_photo, photo_filename,
     render_photo, rgba_image, save_photo, save_photo_with, unique_photo_path, video_filename,
 };
+pub use measure::{
+    CalibrationProfile, DraftView, MeasureCommit, MeasureGesture, MeasureSession, MeasureSet,
+    MeasureShape, MeasureTool, Measurement, angle_deg, distance, format_angle_deg,
+    format_length_px, remap_point, remapped_size,
+};
 pub use orientation::{Orientation, ViewOrientation};
 pub use overlay::{
     AppMode, CROSSHAIR_CIRCLE_FRACTION, CROSSHAIR_OPACITY, CROSSHAIR_TICK_LEN_PX, CrosshairConfig,
     CrosshairStyle, DEFAULT_GRID_OPACITY, DEFAULT_GRID_SPACING_PX, DEFAULT_TICK_SPACING_PX,
-    GridConfig, GridSpacing, MAX_GRID_SPACING_PX, MIN_GRID_SPACING_PX, OverlayColor, OverlayState,
+    GridConfig, GridSpacing, MAX_GRID_SPACING_MM, MAX_GRID_SPACING_PX, MIN_EFFECTIVE_SPACING_PX,
+    MIN_GRID_SPACING_MM, MIN_GRID_SPACING_PX, MeasureOverlay, OverlayColor, OverlayState,
     grid_line_positions, image_center, overlays_for,
 };
+pub use pngmeta::{extract_png_text, inject_png_text};
 pub use view::{MAX_SCALE, MIN_SCALE, NEAREST_FILTER_SCALE, Point, Size, ViewMode, ViewTransform};

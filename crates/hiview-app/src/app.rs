@@ -14,11 +14,12 @@ use hiview_capture::{
     check_disk_space,
 };
 use hiview_core::{
-    AdjustKind, AppConfig, AppMode, CrosshairStyle, GridSpacing, ImageAdjust, OverlayColor,
-    PhotoFormat, PhotoResolution, ViewOrientation, config_path, digits_of, load_config,
-    overlays_for, range_of, save_config, step_of,
+    AdjustKind, AppConfig, AppMode, CalibrationProfile, CrosshairStyle, GridSpacing, ImageAdjust,
+    MeasureCommit, MeasureGesture, MeasureSet, MeasureTool, Orientation, OverlayColor,
+    OverlayState, PhotoFormat, PhotoResolution, Point, ViewOrientation, config_path, digits_of,
+    load_config, overlays_for, range_of, save_config, step_of,
 };
-use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
+use relm4::actions::{RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
 use relm4::gtk::{self, gio, glib};
 use relm4::{
@@ -30,6 +31,7 @@ use crate::cli::Args;
 use crate::components::gallery::{
     GalleryInit, GalleryModel, Input as GalleryInput, Output as GalleryOutput,
 };
+use crate::measure_ui::MeasurePanel;
 use crate::services::camera::CameraService;
 use crate::services::photo::{PhotoOutcome, PhotoService};
 use crate::services::recorder::{ActiveRecording, StopReason, filesystem_free_bytes};
@@ -140,6 +142,57 @@ relm4::new_stateless_action!(GalleryAction, WindowActionGroup, "gallery");
 relm4::new_stateless_action!(ToggleModeAction, WindowActionGroup, "toggle-mode");
 relm4::new_stateless_action!(ToggleGridAction, WindowActionGroup, "toggle-grid");
 relm4::new_stateless_action!(ToggleCrossAction, WindowActionGroup, "toggle-crosshair");
+relm4::new_stateless_action!(MeasureRulerAction, WindowActionGroup, "measure-ruler");
+relm4::new_stateless_action!(MeasureAngleAction, WindowActionGroup, "measure-angle");
+relm4::new_stateless_action!(MeasureCircleAction, WindowActionGroup, "measure-circle");
+
+/// Keymap for the `win.*` actions (CONVENTIONS §13) — the single
+/// source of truth used by the window's capture-phase key controller.
+/// Returns the full action name (e.g. `"win.toggle-grid"`); `None`
+/// means the key is not a shortcut and must propagate. `Ctrl`
+/// shortcuts are matched first so `Ctrl+G` opens the gallery rather
+/// than toggling the grid; other modifiers (`Alt`, `Super`) make a
+/// key not-a-shortcut.
+fn shortcut_action(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> Option<&'static str> {
+    use gtk::gdk::Key;
+    if state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
+        return match key.to_lower() {
+            k if k == Key::comma => Some("win.preferences"),
+            k if k == Key::g => Some("win.gallery"),
+            _ => None,
+        };
+    }
+    if state.intersects(
+        gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::SUPER_MASK
+            | gtk::gdk::ModifierType::HYPER_MASK
+            | gtk::gdk::ModifierType::META_MASK,
+    ) {
+        return None;
+    }
+    match key.to_lower() {
+        k if k == Key::plus || k == Key::equal || k == Key::KP_Add => Some("win.zoom-in"),
+        k if k == Key::minus || k == Key::KP_Subtract => Some("win.zoom-out"),
+        k if k == Key::_0 || k == Key::KP_0 => Some("win.fit-view"),
+        k if k == Key::_1 || k == Key::KP_1 => Some("win.zoom-100"),
+        k if k == Key::h => Some("win.mirror-h"),
+        k if k == Key::v => Some("win.mirror-v"),
+        k if k == Key::bracketleft => Some("win.rotate-ccw"),
+        k if k == Key::bracketright => Some("win.rotate-cw"),
+        k if k == Key::f => Some("win.freeze"),
+        k if k == Key::F11 => Some("win.fullscreen"),
+        k if k == Key::Escape => Some("win.escape"),
+        k if k == Key::space => Some("win.take-photo"),
+        k if k == Key::r => Some("win.record"),
+        k if k == Key::m => Some("win.toggle-mode"),
+        k if k == Key::g => Some("win.toggle-grid"),
+        k if k == Key::c => Some("win.toggle-crosshair"),
+        k if k == Key::l => Some("win.measure-ruler"),
+        k if k == Key::a => Some("win.measure-angle"),
+        k if k == Key::o => Some("win.measure-circle"),
+        _ => None,
+    }
+}
 
 /// Which capture the floating shutter button performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,6 +300,31 @@ pub enum Input {
     ApplyAdjust,
     /// "Restaurar padrões" — all five adjustments back to neutral.
     ResetAdjust,
+    /// A measurement gesture from the viewport (image coords, §6.9).
+    Measure(MeasureGesture),
+    /// `L`/`A`/`O`: arm a tool (same key again disarms it).
+    ArmMeasure(MeasureTool),
+    /// The side-panel tool combo changed (index into `TOOL_NAMES`).
+    ArmMeasureIndex(u32),
+    /// Per-item delete in the measurement list.
+    DeleteMeasurement(u64),
+    /// "Limpar medições" — drop every committed measurement.
+    ClearMeasurements,
+    /// "Nova calibração…" — arms the reference-line tool.
+    StartCalibration,
+    /// The wizard committed a profile: name + real millimetres for
+    /// the line stored in `pending_calibration`.
+    CommitCalibration { name: String, mm: f64 },
+    /// Active-profile combo changed (0 = no calibration).
+    SelectCalibration(u32),
+    /// "Renomear…" clicked — opens the rename dialog.
+    RequestRenameCalibration,
+    /// The rename dialog committed a new name.
+    CalibrationRenamed(String),
+    /// "Excluir…" clicked — opens the destructive confirmation.
+    RequestDeleteCalibration,
+    /// Profile deletion confirmed.
+    DeleteCalibration,
 }
 
 /// Root component of the application.
@@ -339,6 +417,27 @@ pub struct AppModel {
     /// and the popover content): adjustments are meaningless without a
     /// device to persist them under.
     adjust_controls: Vec<gtk::Widget>,
+    /// Committed measurements plus the armed tool's session (§6.9).
+    /// Runtime state — never persisted.
+    measure: MeasureSet,
+    /// The reference line awaiting the calibration wizard's answer.
+    pending_calibration: Option<(Point, Point)>,
+    /// The tool armed before "Nova calibração…" — restored when the
+    /// reference line commits and the wizard opens (§6.9).
+    calibrate_restore: Option<MeasureTool>,
+    /// The Medição panel widgets, built in `init` (list + dialogs are
+    /// imperative — see `measure_ui.rs`).
+    measure_panel: Option<MeasurePanel>,
+    /// Input sink handed to the imperative Medição widgets and
+    /// dialogs — `Rc` so contract tests inject a fake (the same
+    /// pattern as the popover rows).
+    measure_sink: Rc<dyn Fn(Input)>,
+    /// The preferences page hosting the sidebar groups — the Medição
+    /// group is added imperatively like the adjust rows.
+    bench_prefs: adw::PreferencesPage,
+    /// Grid spacing row: its unit (px/mm), digits and range follow the
+    /// active calibration, so it is reconfigured imperatively.
+    grid_spacing_row: adw::SpinRow,
 }
 
 #[relm4::component(pub)]
@@ -406,6 +505,15 @@ impl SimpleComponent for AppModel {
                                 },
                             },
 
+                            // Permanent while a calibration is active
+                            // (§6.9): ring/height invalidate the scale.
+                            add_top_bar = &adw::Banner {
+                                set_title: strings::CALIBRATION_BANNER,
+                                #[watch]
+                                set_revealed: model.mode == AppMode::Bench
+                                    && model.config.active_profile().is_some(),
+                            },
+
                             #[name = "split_view"]
                             #[wrap(Some)]
                             set_content = &adw::OverlaySplitView {
@@ -422,6 +530,7 @@ impl SimpleComponent for AppModel {
                                         },
                                     },
 
+                                    #[name = "bench_prefs"]
                                     #[wrap(Some)]
                                     set_content = &adw::PreferencesPage {
                                         add = &adw::PreferencesGroup {
@@ -436,22 +545,24 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "grid_spacing"]
                                             adw::SpinRow {
-                                                set_title: strings::GRID_SPACING_LABEL,
-                                                set_adjustment: Some(&gtk::Adjustment::new(
-                                                    model.config.overlays.grid.spacing.pixels(None),
-                                                    hiview_core::MIN_GRID_SPACING_PX,
-                                                    hiview_core::MAX_GRID_SPACING_PX,
-                                                    5.0, 25.0, 0.0,
-                                                )),
-                                                set_digits: 0,
+                                                // The unit (px/mm),
+                                                // digits and range
+                                                // follow the active
+                                                // calibration —
+                                                // `sync_grid_unit`
+                                                // reconfigures the row.
                                                 #[watch]
-                                                set_value: model.config.overlays.grid.spacing.pixels(None),
+                                                set_title: model.grid_spacing_label(),
+                                                #[watch]
+                                                set_value: model.grid_spacing_display(),
                                                 connect_value_notify[sender] => move |row| {
                                                     sender.input(Input::SetGridSpacing(row.value()));
                                                 },
                                             },
 
+                                            #[name = "grid_color_row"]
                                             adw::ComboRow {
                                                 set_title: strings::GRID_COLOR_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::COLOR_NAMES)),
@@ -462,6 +573,7 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "grid_opacity_row"]
                                             adw::SpinRow {
                                                 set_title: strings::GRID_OPACITY_LABEL,
                                                 set_adjustment: Some(&gtk::Adjustment::new(
@@ -489,6 +601,7 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "cross_style_row"]
                                             adw::ComboRow {
                                                 set_title: strings::CROSS_STYLE_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::STYLE_NAMES)),
@@ -499,6 +612,7 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "cross_color_row"]
                                             adw::ComboRow {
                                                 set_title: strings::CROSS_COLOR_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::COLOR_NAMES)),
@@ -865,10 +979,25 @@ impl SimpleComponent for AppModel {
             adjust_pending: Rc::new(Cell::new(false)),
             adjust_sliders: Vec::new(),
             adjust_controls: Vec::new(),
+            measure: MeasureSet::default(),
+            pending_calibration: None,
+            calibrate_restore: None,
+            measure_panel: None,
+            measure_sink: Rc::new(|_| {}),
+            bench_prefs: adw::PreferencesPage::new(),
+            grid_spacing_row: adw::SpinRow::with_range(0.0, 1.0, 1.0),
         };
         model.sync_menu();
 
         let widgets = view_output!();
+        // No panel control may take the wheel — see
+        // `measure_ui::swallow_scroll` (the "profile lost" regression
+        // extended to every ComboRow/SpinRow by Henrique's rule).
+        crate::measure_ui::swallow_scroll(&widgets.grid_color_row);
+        crate::measure_ui::swallow_scroll(&widgets.cross_style_row);
+        crate::measure_ui::swallow_scroll(&widgets.cross_color_row);
+        crate::measure_ui::swallow_scroll(&widgets.grid_spacing);
+        crate::measure_ui::swallow_scroll(&widgets.grid_opacity_row);
         model.grab_widgets(&widgets);
         // The gallery popover joins the shared focus-return contract
         // now that the real viewport exists (§7).
@@ -877,6 +1006,24 @@ impl SimpleComponent for AppModel {
         // imperatively — they share one factory (§6.11).
         model.build_adjust_ui(&widgets, &sender);
         model.maybe_apply_stored_adjust();
+        // The Medição group is imperative too (dynamic list, dialogs).
+        // Its widgets need an `Rc` input sink — the popover pattern.
+        let measure_sink: Rc<dyn Fn(Input)> = Rc::new({
+            let sender = sender.clone();
+            move |input| sender.input(input)
+        });
+        let (measure_group, measure_panel) = crate::measure_ui::build(&measure_sink);
+        widgets.bench_prefs.add(&measure_group);
+        model.measure_panel = Some(measure_panel);
+        model.measure_sink = measure_sink;
+        // Measurement gestures arrive as image coordinates from the
+        // viewport's gesture controllers (§6.9).
+        widgets.viewport.set_measure_handler({
+            let sender = sender.clone();
+            move |g| sender.input(Input::Measure(g))
+        });
+        model.sync_grid_unit();
+        model.sync_measure_ui();
         model.nav_view = widgets.nav_view.clone();
         model.nav_view.connect_popped({
             let sender = sender.clone();
@@ -933,6 +1080,9 @@ impl SimpleComponent for AppModel {
         view_action!(ToggleModeAction, Input::ToggleMode);
         view_action!(ToggleGridAction, Input::ToggleGrid);
         view_action!(ToggleCrossAction, Input::ToggleCrosshair);
+        view_action!(MeasureRulerAction, Input::ArmMeasure(MeasureTool::Ruler));
+        view_action!(MeasureAngleAction, Input::ArmMeasure(MeasureTool::Angle));
+        view_action!(MeasureCircleAction, Input::ArmMeasure(MeasureTool::Circle));
 
         // The window must finalize a running recording (EOS sequence)
         // before it may close — see Input::CloseRequested.
@@ -943,7 +1093,7 @@ impl SimpleComponent for AppModel {
                 glib::Propagation::Stop
             }
         });
-        group.register_for_widget(root);
+        group.register_for_widget(root.clone());
 
         // Ctrl+C and logout send SIGINT/SIGTERM; both run the same
         // finalize-then-quit path as the window close request. glib's
@@ -964,26 +1114,30 @@ impl SimpleComponent for AppModel {
             Err(err) => tracing::warn!("cannot install signal handlers: {err}"),
         }
 
-        // Shortcuts for the M2 actions (docs/CONVENTIONS.md §13).
-        let app = relm4::main_adw_application();
-        app.set_accelerators_for_action::<ZoomInAction>(&["plus", "equal", "KP_Add"]);
-        app.set_accelerators_for_action::<ZoomOutAction>(&["minus", "KP_Subtract"]);
-        app.set_accelerators_for_action::<FitViewAction>(&["0", "KP_0"]);
-        app.set_accelerators_for_action::<Zoom100Action>(&["1", "KP_1"]);
-        app.set_accelerators_for_action::<MirrorHAction>(&["h", "H"]);
-        app.set_accelerators_for_action::<MirrorVAction>(&["v", "V"]);
-        app.set_accelerators_for_action::<RotateCcwAction>(&["bracketleft"]);
-        app.set_accelerators_for_action::<RotateCwAction>(&["bracketright"]);
-        app.set_accelerators_for_action::<FreezeAction>(&["f", "F"]);
-        app.set_accelerators_for_action::<FullscreenAction>(&["F11"]);
-        app.set_accelerators_for_action::<EscapeAction>(&["Escape"]);
-        app.set_accelerators_for_action::<TakePhotoAction>(&["space"]);
-        app.set_accelerators_for_action::<RecordAction>(&["r", "R"]);
-        app.set_accelerators_for_action::<PreferencesAction>(&["<Ctrl>comma"]);
-        app.set_accelerators_for_action::<GalleryAction>(&["<Ctrl>g"]);
-        app.set_accelerators_for_action::<ToggleModeAction>(&["m", "M"]);
-        app.set_accelerators_for_action::<ToggleGridAction>(&["g", "G"]);
-        app.set_accelerators_for_action::<ToggleCrossAction>(&["c", "C"]);
+        // Shortcuts (docs/CONVENTIONS.md §13). NOT
+        // `set_accelerators_for_action`: app-level accelerators fire
+        // while a dialog is open and eat keystrokes destined for an
+        // Entry (M8 round-2 finding). A capture-phase key controller
+        // on the window runs `focus::shortcuts_allowed` first — never
+        // with a dialog up, never with a text input focused.
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        keys.connect_key_pressed({
+            let window = root.clone();
+            move |_, keyval, _keycode, state| {
+                if !crate::focus::shortcuts_allowed(&window) {
+                    return glib::Propagation::Proceed;
+                }
+                match shortcut_action(keyval, state) {
+                    Some(name) => {
+                        let _ = gtk::prelude::WidgetExt::activate_action(&window, name, None);
+                        glib::Propagation::Stop
+                    }
+                    None => glib::Propagation::Proceed,
+                }
+            }
+        });
+        root.add_controller(keys);
 
         ComponentParts { model, widgets }
     }
@@ -1016,22 +1170,26 @@ impl SimpleComponent for AppModel {
             Input::FitView => self.viewport.fit(),
             Input::Zoom100 => self.viewport.zoom_100(),
             Input::MirrorH => {
+                let from = self.orientation.method();
                 self.orientation.toggle_mirror_h();
-                self.apply_orientation();
+                self.on_orientation_changed(from);
             }
             Input::MirrorV => {
+                let from = self.orientation.method();
                 self.orientation.toggle_mirror_v();
-                self.apply_orientation();
+                self.on_orientation_changed(from);
             }
             // Rotation is blocked while recording: a video cannot change
             // resolution mid-file (docs/ARCHITECTURE.md section 6.4).
             Input::RotateCcw if self.recording.is_none() => {
+                let from = self.orientation.method();
                 self.orientation.rotate_ccw();
-                self.apply_orientation();
+                self.on_orientation_changed(from);
             }
             Input::RotateCw if self.recording.is_none() => {
+                let from = self.orientation.method();
                 self.orientation.rotate_cw();
-                self.apply_orientation();
+                self.on_orientation_changed(from);
             }
             Input::RotateCcw | Input::RotateCw => {
                 tracing::debug!("rotate ignored while recording");
@@ -1049,7 +1207,11 @@ impl SimpleComponent for AppModel {
                 }
             }
             Input::Escape => {
-                if self.window.is_fullscreen() {
+                // `Esc` cancels a measurement in progress before it
+                // touches fullscreen (§6.9).
+                if self.measure.cancel() {
+                    self.measure_changed();
+                } else if self.window.is_fullscreen() {
                     self.window.unfullscreen();
                 }
             }
@@ -1154,13 +1316,22 @@ impl SimpleComponent for AppModel {
                     self.overlays_changed();
                 }
             }
-            Input::SetGridSpacing(px) => {
-                let px = px.clamp(
-                    hiview_core::MIN_GRID_SPACING_PX,
-                    hiview_core::MAX_GRID_SPACING_PX,
-                );
-                if self.config.overlays.grid.spacing != GridSpacing::Pixels(px) {
-                    self.config.overlays.grid.spacing = GridSpacing::Pixels(px);
+            Input::SetGridSpacing(value) => {
+                // The row edits millimetres while a calibration is
+                // active, pixels otherwise (§6.9).
+                let spacing = if self.active_px_per_mm().is_some() {
+                    GridSpacing::Millimeters(value.clamp(
+                        hiview_core::MIN_GRID_SPACING_MM,
+                        hiview_core::MAX_GRID_SPACING_MM,
+                    ))
+                } else {
+                    GridSpacing::Pixels(value.clamp(
+                        hiview_core::MIN_GRID_SPACING_PX,
+                        hiview_core::MAX_GRID_SPACING_PX,
+                    ))
+                };
+                if self.config.overlays.grid.spacing != spacing {
+                    self.config.overlays.grid.spacing = spacing;
                     self.overlays_changed();
                 }
             }
@@ -1221,6 +1392,141 @@ impl SimpleComponent for AppModel {
                 self.sync_adjust_sliders();
                 self.apply_adjust();
             }
+            Input::Measure(gesture) => {
+                match self.measure.gesture(gesture) {
+                    MeasureCommit::CalibrationLine { a, b } => {
+                        self.open_calibration_wizard(a, b);
+                    }
+                    MeasureCommit::Shape(_) | MeasureCommit::Nothing => {}
+                }
+                // Hover/drag drafts live in the overlay state — every
+                // gesture refreshes the drawing.
+                self.measure_changed();
+            }
+            Input::ArmMeasure(tool) => {
+                if self.bench_only() {
+                    // Same key again disarms the tool.
+                    let next = (self.measure.armed_tool() != Some(tool)).then_some(tool);
+                    self.arm_measure(next);
+                }
+            }
+            Input::ArmMeasureIndex(index) => {
+                if self.mode == AppMode::Bench {
+                    self.arm_measure(match index {
+                        1 => Some(MeasureTool::Ruler),
+                        2 => Some(MeasureTool::Angle),
+                        3 => Some(MeasureTool::Circle),
+                        _ => None,
+                    });
+                }
+            }
+            Input::DeleteMeasurement(id) => {
+                if self.measure.remove(id) {
+                    self.measure_changed();
+                }
+            }
+            Input::ClearMeasurements => {
+                if !self.measure.items.is_empty() {
+                    self.measure.clear();
+                    self.measure_changed();
+                }
+            }
+            Input::StartCalibration => {
+                if self.bench_only() {
+                    if self.state == CameraState::Streaming {
+                        // Remember the armed tool — the wizard restores
+                        // it once the reference line commits (§6.9).
+                        if self.measure.armed_tool() != Some(MeasureTool::Calibrate) {
+                            self.calibrate_restore = self.measure.armed_tool();
+                        }
+                        self.arm_measure(Some(MeasureTool::Calibrate));
+                    } else {
+                        self.show_toast(adw::Toast::new(strings::MEASURE_NO_FRAME));
+                    }
+                }
+            }
+            Input::CommitCalibration { name, mm } => {
+                if let Some((a, b)) = self.pending_calibration.take() {
+                    let old_ppm = self.active_px_per_mm();
+                    if let Some(profile) = CalibrationProfile::from_line(a, b, mm, name.clone()) {
+                        self.config.upsert_profile(profile);
+                        self.calibration_changed(old_ppm);
+                        tracing::info!("calibration profile created: {name}");
+                    }
+                }
+            }
+            Input::SelectCalibration(index) => {
+                // Ignore out-of-range selections — GTK can notify with
+                // `INVALID_LIST_POSITION` (u32::MAX) while the combo's
+                // model splices; treating it as "Nenhuma" would wipe
+                // the active profile (M8 round-2 finding).
+                if index as usize > self.config.calibration.len() {
+                    return;
+                }
+                let old_ppm = self.active_px_per_mm();
+                let name = index
+                    .checked_sub(1)
+                    .and_then(|i| self.config.calibration.get(i as usize))
+                    .map(|p| p.name.clone());
+                if self.config.active_calibration != name {
+                    self.config.active_calibration = name;
+                    self.calibration_changed(old_ppm);
+                }
+            }
+            Input::RequestRenameCalibration => {
+                if let Some(active) = self.config.active_profile() {
+                    let current = active.name.clone();
+                    let others: Vec<String> = self
+                        .config
+                        .calibration
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect();
+                    crate::measure_dialogs::open_rename_dialog(
+                        &self.window,
+                        &self.viewport,
+                        &current,
+                        others,
+                        &self.measure_sink,
+                    );
+                }
+            }
+            Input::CalibrationRenamed(name) => {
+                let trimmed = name.trim();
+                if let Some(active) = self.config.active_profile()
+                    && !trimmed.is_empty()
+                    && !self
+                        .config
+                        .calibration
+                        .iter()
+                        .any(|p| p.name == trimmed && p.name != active.name)
+                {
+                    let old = active.name.clone();
+                    if let Some(p) = self.config.calibration.iter_mut().find(|p| p.name == old) {
+                        p.name = trimmed.to_string();
+                    }
+                    self.config.active_calibration = Some(trimmed.to_string());
+                    self.persist_config();
+                    self.sync_measure_ui();
+                }
+            }
+            Input::RequestDeleteCalibration => {
+                if let Some(active) = self.config.active_profile() {
+                    crate::measure_dialogs::confirm_delete_profile(
+                        &self.window,
+                        &active.name.clone(),
+                        &self.measure_sink,
+                    );
+                }
+            }
+            Input::DeleteCalibration => {
+                let old_ppm = self.active_px_per_mm();
+                if let Some(name) = self.config.active_calibration.clone() {
+                    self.config.remove_profile(&name);
+                    self.calibration_changed(old_ppm);
+                    tracing::info!("calibration profile deleted: {name}");
+                }
+            }
         }
     }
 }
@@ -1244,6 +1550,8 @@ impl AppModel {
         self.mode_bench_btn = widgets.mode_bench_btn.clone();
         self.split_view = widgets.split_view.clone();
         self.bench_sidebar = widgets.bench_sidebar.clone();
+        self.bench_prefs = widgets.bench_prefs.clone();
+        self.grid_spacing_row = widgets.grid_spacing.clone();
         // Push the persisted overlay/mode state into the viewport — the
         // placeholder overlays stay `None` (hidden) until this runs.
         self.apply_overlays();
@@ -1275,6 +1583,181 @@ impl AppModel {
         if self.state == CameraState::Streaming {
             self.camera.set_orientation(self.orientation);
         }
+    }
+
+    /// The orientation was toggled: stored measurement points are
+    /// remapped into the new displayed frame (`from` is the method
+    /// before the toggle) so they stay glued to the measured feature.
+    fn on_orientation_changed(&mut self, from: Orientation) {
+        let to = self.orientation.method();
+        if to != from {
+            self.measure.remap(from, to, self.viewport.frame_size());
+            self.apply_overlays();
+        }
+        self.apply_orientation();
+    }
+
+    /// The active calibration's pixels-per-millimetre, or `None` —
+    /// measurements and grid/tick spacings fall back to pixels.
+    fn active_px_per_mm(&self) -> Option<f64> {
+        self.config.active_profile().map(|p| p.px_per_mm)
+    }
+
+    /// The effective overlay state: the persisted grid/crosshair plus
+    /// the runtime measurement layer converted by the calibration.
+    fn current_overlays(&self) -> Option<OverlayState> {
+        let mut state = self.config.overlays.clone();
+        state.measure = self.measure.overlay(self.active_px_per_mm());
+        overlays_for(self.mode, &state)
+    }
+
+    /// Measurement state changed (gesture, arm, delete, cancel): push
+    /// the overlay snapshot and resync the side-panel list.
+    fn measure_changed(&mut self) {
+        self.apply_overlays();
+        self.sync_measure_ui();
+    }
+
+    /// Arms/disarms the measurement tool: while armed the viewport
+    /// routes primary clicks/drags to the session and pans on the
+    /// middle button (§6.9). Arming also drops a pending wizard line.
+    fn arm_measure(&mut self, tool: Option<MeasureTool>) {
+        if tool != Some(MeasureTool::Calibrate) {
+            // An explicit tool choice discards a pending wizard line
+            // and the saved "restore" tool — the user moved on.
+            self.pending_calibration = None;
+            self.calibrate_restore = None;
+        }
+        self.measure.arm(tool);
+        self.viewport.set_measure_tool(tool);
+        self.measure_changed();
+    }
+
+    /// Pushes measurement + calibration state into the side panel.
+    fn sync_measure_ui(&mut self) {
+        if let Some(panel) = self.measure_panel.as_mut() {
+            crate::measure_ui::sync(panel, &self.measure, &self.config, &self.measure_sink);
+        }
+    }
+
+    /// The active calibration changed (select/create/delete): rekey
+    /// grid and tick spacings to the new unit, persist, refresh.
+    fn calibration_changed(&mut self, old_ppm: Option<f64>) {
+        let new_ppm = self.active_px_per_mm();
+        self.config.overlays.grid.spacing =
+            self.config.overlays.grid.spacing.rekeyed(old_ppm, new_ppm);
+        self.config.overlays.crosshair.tick_spacing = self
+            .config
+            .overlays
+            .crosshair
+            .tick_spacing
+            .rekeyed(old_ppm, new_ppm);
+        self.persist_config();
+        self.apply_overlays();
+        self.sync_grid_unit();
+        self.sync_measure_ui();
+    }
+
+    /// The reference line was drawn: disarm the calibration tool —
+    /// restoring whatever tool was armed before (or none) — remember
+    /// the line, then open the wizard. The disarm MUST come first:
+    /// `arm_measure` clears `pending_calibration` when the next tool
+    /// isn't `Calibrate`.
+    fn open_calibration_wizard(&mut self, a: Point, b: Point) {
+        let restore = self.calibrate_restore.take();
+        self.arm_measure(restore);
+        self.pending_calibration = Some((a, b));
+        let existing: Vec<String> = self
+            .config
+            .calibration
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        crate::measure_dialogs::open_calibration_dialog(
+            &self.window,
+            &self.viewport,
+            hiview_core::distance(a, b),
+            existing,
+            strings::calibration_default_name(self.config.calibration.len() + 1),
+            &self.measure_sink,
+        );
+    }
+
+    /// Grid spacing row title — the unit follows the calibration (§6.9).
+    fn grid_spacing_label(&self) -> &'static str {
+        if self.active_px_per_mm().is_some() {
+            strings::GRID_SPACING_MM_LABEL
+        } else {
+            strings::GRID_SPACING_PX_LABEL
+        }
+    }
+
+    /// The value the grid spacing row shows, in its current unit.
+    fn grid_spacing_display(&self) -> f64 {
+        match self.config.overlays.grid.spacing {
+            GridSpacing::Pixels(px) => px,
+            GridSpacing::Millimeters(mm) => mm,
+        }
+    }
+
+    /// Reconfigures the grid spacing row for its current unit — the
+    /// adjustment's range and digits can't come from a `#[watch]`.
+    fn sync_grid_unit(&self) {
+        let (value, lo, hi, step, digits) = if self.active_px_per_mm().is_some() {
+            (
+                self.grid_spacing_display(),
+                hiview_core::MIN_GRID_SPACING_MM,
+                hiview_core::MAX_GRID_SPACING_MM,
+                0.1,
+                2,
+            )
+        } else {
+            (
+                self.grid_spacing_display(),
+                hiview_core::MIN_GRID_SPACING_PX,
+                hiview_core::MAX_GRID_SPACING_PX,
+                5.0,
+                0,
+            )
+        };
+        self.grid_spacing_row
+            .set_adjustment(Some(&gtk::Adjustment::new(
+                value,
+                lo,
+                hi,
+                step,
+                step * 5.0,
+                0.0,
+            )));
+        self.grid_spacing_row.set_digits(digits);
+    }
+
+    /// PNG `tEXt` provenance for the next photo (§6.6, M8): app
+    /// version, mirror/rotation and the active calibration. JPEG
+    /// files carry no metadata (out of scope).
+    fn photo_png_text(&self) -> Vec<(String, String)> {
+        let mirror = match (self.orientation.mirror_h(), self.orientation.mirror_v()) {
+            (true, true) => "H+V",
+            (true, false) => "H",
+            (false, true) => "V",
+            (false, false) => "none",
+        };
+        let mut meta = vec![
+            (
+                "Software".into(),
+                format!("HiView {}", env!("CARGO_PKG_VERSION")),
+            ),
+            ("Mirror".into(), mirror.to_string()),
+            (
+                "Rotation".into(),
+                format!("{} deg CW", 90 * u32::from(self.orientation.quarters_cw())),
+            ),
+        ];
+        if let Some(p) = self.config.active_profile() {
+            meta.push(("Calibration".into(), p.name.clone()));
+            meta.push(("Calibration px/mm".into(), format!("{:.3}", p.px_per_mm)));
+        }
+        meta
     }
 
     /// Toggles the view-only freeze and its visual indicator.
@@ -1474,6 +1957,13 @@ impl AppModel {
         }
         self.mode = mode;
         self.config.mode = mode;
+        // Explorar stays clean: disarm any tool and drop a pending
+        // wizard line — committed measurements reappear on return.
+        if mode == AppMode::Explore {
+            self.measure.arm(None);
+            self.pending_calibration = None;
+            self.viewport.set_measure_tool(None);
+        }
         self.persist_config();
         self.apply_overlays();
         tracing::info!("mode switched to {mode:?}");
@@ -1483,8 +1973,7 @@ impl AppModel {
     /// `overlays_for` hides everything in Explorar and when all overlays
     /// are off; switching back to Bancada restores the saved settings.
     fn apply_overlays(&self) {
-        self.viewport
-            .set_overlays(overlays_for(self.mode, &self.config.overlays));
+        self.viewport.set_overlays(self.current_overlays());
     }
 
     /// Any overlay setting changed: persist and redraw.
@@ -1515,13 +2004,24 @@ impl AppModel {
             && let Some(frame) = self.viewport.photo_frame()
         {
             let overlays = if self.config.photo.burn_overlays {
-                overlays_for(self.mode, &self.config.overlays)
+                // Burn the committed measurements — never a
+                // half-finished draft (§6.9).
+                self.current_overlays().map(|mut s| {
+                    s.measure.draft = None;
+                    s
+                })
             } else {
                 None
             };
             if self
                 .photos
-                .take(&frame, &self.config.photo, self.photo_dir(), overlays)
+                .take(
+                    &frame,
+                    &self.config.photo,
+                    self.photo_dir(),
+                    overlays,
+                    self.photo_png_text(),
+                )
                 .is_ok()
             {
                 self.flash_shutter();
@@ -1813,6 +2313,8 @@ impl AppModel {
     fn adjust_row(kind: AdjustKind, sink: &Rc<dyn Fn(Input)>) -> (gtk::Widget, gtk::Scale) {
         let (min, max) = range_of(kind);
         let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step_of(kind));
+        // The wheel must scroll the panel, never the value (§13 rule).
+        crate::measure_ui::swallow_scroll(&scale);
         scale.set_value(ImageAdjust::default().get(kind));
         scale.set_draw_value(true);
         scale.set_value_pos(gtk::PositionType::Right);
@@ -2001,6 +2503,7 @@ impl AppModel {
         group.set_title(strings::PREFS_PHOTOS_PAGE);
 
         let format_row = adw::ComboRow::new();
+        crate::measure_ui::swallow_scroll(&format_row);
         format_row.set_title(strings::PREFS_FORMAT_LABEL);
         format_row.set_model(Some(&gtk::StringList::new(&["PNG", "JPEG"])));
         format_row.set_selected(match self.config.photo.format {
@@ -2014,6 +2517,7 @@ impl AppModel {
         group.add(&format_row);
 
         let res_row = adw::ComboRow::new();
+        crate::measure_ui::swallow_scroll(&res_row);
         res_row.set_title(strings::PREFS_RESOLUTION_LABEL);
         res_row.set_model(Some(&gtk::StringList::new(&[
             strings::RES_NATIVE_LABEL,
@@ -2246,5 +2750,51 @@ pub(crate) mod tests {
                 .iter()
                 .any(|(k, v)| *k == AdjustKind::Brightness && (*v + 0.5).abs() < 1e-9)
         );
+
+        // The §13 keymap — every letter/digit the panel advertises must
+        // reach a win.* action, and `Ctrl` must not leak into the
+        // single-key table (`Ctrl+G` is the gallery, not the grid).
+        use gtk::gdk::{Key, ModifierType};
+        assert_eq!(
+            shortcut_action(Key::g, ModifierType::empty()),
+            Some("win.toggle-grid")
+        );
+        assert_eq!(
+            shortcut_action(Key::G, ModifierType::SHIFT_MASK),
+            Some("win.toggle-grid")
+        );
+        assert_eq!(
+            shortcut_action(Key::g, ModifierType::CONTROL_MASK),
+            Some("win.gallery")
+        );
+        assert_eq!(
+            shortcut_action(Key::l, ModifierType::empty()),
+            Some("win.measure-ruler")
+        );
+        assert_eq!(
+            shortcut_action(Key::a, ModifierType::empty()),
+            Some("win.measure-angle")
+        );
+        assert_eq!(
+            shortcut_action(Key::o, ModifierType::empty()),
+            Some("win.measure-circle")
+        );
+        assert_eq!(
+            shortcut_action(Key::space, ModifierType::empty()),
+            Some("win.take-photo")
+        );
+        assert_eq!(
+            shortcut_action(Key::Escape, ModifierType::empty()),
+            Some("win.escape")
+        );
+        assert_eq!(
+            shortcut_action(Key::comma, ModifierType::CONTROL_MASK),
+            Some("win.preferences")
+        );
+        // Not shortcuts: bare Ctrl+letter combos other than the two
+        // defined, Alt-modified keys, unbound letters.
+        assert_eq!(shortcut_action(Key::x, ModifierType::CONTROL_MASK), None);
+        assert_eq!(shortcut_action(Key::g, ModifierType::ALT_MASK), None);
+        assert_eq!(shortcut_action(Key::x, ModifierType::empty()), None);
     }
 }

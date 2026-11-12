@@ -219,9 +219,6 @@ pub const GRID_GROUP_TITLE: &str = "Grade";
 /// Side panel row: grid on/off (`G`).
 pub const GRID_SHOW_LABEL: &str = "Mostrar grade (G)";
 
-/// Side panel row: grid spacing in image pixels.
-pub const GRID_SPACING_LABEL: &str = "Espaçamento (px)";
-
 /// Side panel row: grid line color.
 pub const GRID_COLOR_LABEL: &str = "Cor";
 
@@ -285,3 +282,100 @@ pub fn elapsed_label(seconds: u64) -> String {
         format!("{}:{:02}", seconds / 60, seconds % 60)
     }
 }
+
+/// Side panel group title: measurement tools and calibration (§6.9).
+pub const MEASURE_GROUP_TITLE: &str = "Medição";
+
+/// Side panel row: armed measurement tool.
+pub const MEASURE_TOOL_LABEL: &str = "Ferramenta";
+
+/// Tool combo entries — same order as the `MeasureTool` arm table
+/// (index 0 disarms).
+pub const TOOL_NAMES: [&str; 4] = ["Nenhuma", "Régua (L)", "Ângulo (A)", "Círculo (O)"];
+
+/// Per-item row prefix in the measurement list, by tool.
+pub const TOOL_SHORT_NAMES: [&str; 3] = ["Régua", "Ângulo", "Círculo"];
+
+/// Side panel row: starts the calibration wizard (draw a line, type
+/// the real distance).
+pub const CALIBRATE_BUTTON_LABEL: &str = "Nova calibração…";
+
+/// Side panel row: the active calibration profile.
+pub const CALIBRATION_ACTIVE_LABEL: &str = "Calibração ativa";
+
+/// First entry of the calibration combo: no profile, pixel results.
+pub const CALIBRATION_NONE: &str = "Nenhuma (pixels)";
+
+/// "Nova calibração…" subtitle while the Calibrate tool is armed —
+/// the tool combo shows "Nenhuma", so this flags the mode.
+pub const CALIBRATION_ARMED_HINT: &str = "Arraste uma linha sobre a distância conhecida.";
+
+/// Side panel button: rename the active calibration profile.
+pub const CALIBRATION_RENAME_LABEL: &str = "Renomear…";
+
+/// Side panel button: delete the active calibration profile.
+pub const CALIBRATION_DELETE_LABEL: &str = "Excluir…";
+
+/// Side panel row: removes every measurement on screen.
+pub const MEASURE_CLEAR_LABEL: &str = "Limpar medições";
+
+/// Permanent banner while a calibration is active (§6.9) — the wording
+/// is contractual, keep it exact.
+pub const CALIBRATION_BANNER: &str =
+    "Calibração válida apenas se o anel de ampliação e a altura não mudaram desde a calibração.";
+
+/// Calibration wizard dialog title.
+pub const CALIBRATION_DIALOG_TITLE: &str = "Nova calibração";
+
+/// Calibration wizard: drawn line description ("Linha medida: 123 px").
+pub fn calibration_line_label(px: f64) -> String {
+    format!("Linha medida: {px:.0} px")
+}
+
+/// Calibration wizard row: the real-world length of the drawn line.
+pub const CALIBRATION_REAL_LABEL: &str = "Distância real (mm)";
+
+/// Calibration wizard row: profile name entry.
+pub const CALIBRATION_NAME_LABEL: &str = "Nome do perfil";
+
+/// Dialog confirm button shared by the calibration wizards.
+pub const CALIBRATION_CONFIRM_LABEL: &str = "Criar perfil";
+
+/// Rename dialog title for the active calibration profile.
+pub const RENAME_DIALOG_TITLE: &str = "Renomear calibração";
+
+/// Rename dialog confirm button.
+pub const RENAME_CONFIRM_LABEL: &str = "Renomear";
+
+/// Delete-profile confirmation title.
+pub const CALIBRATION_DELETE_TITLE: &str = "Excluir calibração?";
+
+/// Delete-profile confirmation body ("O perfil X será removido…").
+pub fn calibration_delete_body(name: &str) -> String {
+    format!(
+        "O perfil \"{name}\" será removido. As medições na tela passam a ser exibidas em pixels."
+    )
+}
+
+/// Generic cancel label for dialogs.
+pub const DIALOG_CANCEL: &str = "Cancelar";
+
+/// Generic delete label for confirmations.
+pub const DIALOG_DELETE: &str = "Excluir";
+
+/// Toast: a measurement needs a streaming frame to land on.
+pub const MEASURE_NO_FRAME: &str = "Meça sobre a imagem da câmera";
+
+/// Grid spacing row title while no calibration is active.
+pub const GRID_SPACING_PX_LABEL: &str = "Espaçamento (px)";
+
+/// Grid spacing row title with an active calibration.
+pub const GRID_SPACING_MM_LABEL: &str = "Espaçamento (mm)";
+
+/// Default profile name in the calibration wizard.
+pub fn calibration_default_name(n: usize) -> String {
+    format!("Calibração {n}")
+}
+
+/// Toast when the typed profile name already exists.
+pub const CALIBRATION_NAME_TAKEN: &str = "Já existe um perfil com esse nome";

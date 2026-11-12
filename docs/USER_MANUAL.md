@@ -101,7 +101,7 @@ O HiView tem dois modos, escolhidos no seletor do topo ou pela tecla `M`:
 - **Explorar** é o modo simples: a imagem ocupa tudo e não há painel
   lateral nem sobreposições. É o modo padrão para uso casual.
 - **Bancada** é o modo de inspeção: abre um **painel lateral** com
-  grade, mira e ajustes de imagem (medição chega em versão futura). As
+  grade, mira, ajustes de imagem e medição. As
   sobreposições ligadas na Bancada voltam a aparecer quando você
   retorna ao modo — mas só aparecem na Bancada.
 - No **Explorar**, os ajustes de brilho e contraste ficam no botão ☀
@@ -152,7 +152,12 @@ O que entra na foto:
 | Resolução | Nativa 640×480 · 1280×960 *(interpolada)* · 1600×1200 *(interpolada)* |
 | Pasta | Pasta onde as fotos são salvas (padrão: **Imagens/HiView**) |
 | Redução de ruído | Desligada · 4 · 8 · 16 quadros. Combina várias capturas numa foto mais limpa. **Mantenha o microscópio e o objeto parados** durante a captura (menos de 1 segundo) |
-| Gravar sobreposições | Inclui grade e mira na foto, iguais à tela |
+| Gravar sobreposições | Inclui grade, mira e medições na foto, iguais à tela |
+
+> Fotos **PNG** guardam também metadados de texto com a calibração
+> ativa (nome e px/mm), o espelhamento, a rotação e a versão do HiView
+> — útil para conferir depois como a foto foi tirada. Fotos JPEG não
+> levam metadados.
 
 ---
 
@@ -220,15 +225,16 @@ vez que você abrir o programa.
 ### 11.1 Grade e mira
 
 - **Grade** (`G`): linhas de referência para alinhar componentes.
-  No painel você ajusta o **espaçamento em pixels da imagem**, a **cor**
+  No painel você ajusta o **espaçamento**, a **cor**
   e a **opacidade**. As linhas acompanham zoom, arrasto, espelhamento e
   rotação, e ficam sempre finas e nítidas, mesmo em 800%.
 - **Mira** (`C`): marca o centro da imagem. Estilos: **cruz**,
-  **cruz com círculo** e **cruz com escala** (traços a cada tantos
-  pixels). A cor também é configurável no painel.
+  **cruz com círculo** e **cruz com escala** (traços de espaçamento
+  regular). A cor também é configurável no painel.
 
-> O espaçamento da grade e da escala da mira hoje é em pixels da
-> imagem. Espaçamento em milímetros chega junto com a calibração.
+> O espaçamento da grade e da escala da mira segue a calibração: com um
+> perfil ativo (§11.3), o painel edita em **milímetros**; sem
+> calibração, em pixels da imagem.
 
 Grade e mira aparecem na tela e, se **Gravar sobreposições** estiver
 ligada em Preferências → Fotos, também saem nas fotos. Os vídeos nunca
@@ -253,17 +259,18 @@ tela.
 
 ### 11.3 Medição
 
-> ⚠️ Planejado para uma versão futura — ainda não disponível.
-
 > ⚠️ **Antes de medir, calibre.** Sem calibração, as medidas saem em pixels.
 
 **Como calibrar:**
 
 1. Coloque sob o microscópio uma **lâmina de calibração** e foque. A melhor referência é a **cruz com divisões de 0,1 mm**; nas ampliações menores, use a régua de 40 mm da lâmina. Sem lâmina, uma régua milimetrada comum também serve, com menos precisão.
-2. Painel Bancada → **Calibrar**.
+2. Painel Bancada → Medição → **Nova calibração…**.
 3. Desenhe uma linha sobre uma distância conhecida, de preferência longa (por exemplo, 10 divisões da cruz = 1,0 mm). Quanto maior a distância, menor o erro.
 4. Digite a distância real (ex.: `1` mm) e dê um nome ao perfil (ex.: "Anel no máximo, altura baixa").
 5. Pronto: as medidas passam a sair em mm/µm.
+
+Os perfis ficam salvos no painel Bancada → **Medição**: você pode
+selecionar o perfil ativo, renomeá-lo ou excluí-lo.
 
 > ⚠️ **Muito importante:** a calibração vale **só para aquela posição do anel de ampliação e aquela altura**. Mexeu no anel ou no suporte? Calibre de novo ou escolha outro perfil salvo. O HiView mostra esse aviso enquanto houver uma calibração ativa.
 
@@ -272,10 +279,18 @@ tela.
 | Ferramenta | Como usar |
 |---|---|
 | Régua (`L`) | Clique no ponto inicial e no final |
-| Ângulo | Clique em três pontos (o do meio é o vértice) |
-| Círculo | Clique no centro e arraste até a borda: mostra o diâmetro |
+| Ângulo (`A`) | Clique em três pontos (o do meio é o vértice) |
+| Círculo (`O`) | Clique no centro e arraste até a borda: mostra o diâmetro |
 
-`Esc` cancela a medição em andamento. As medidas aparecem com a **margem de erro** (ex.: `0,52 mm ± 0,01`). Com 640×480 pixels, cada pixel tem um tamanho real, e é isso que a margem indica.
+Enquanto uma ferramenta está armada, o **botão esquerdo** mede e a
+**roda do meio arrastada** faz o pan (a roda continua dando zoom).
+`Esc` cancela a medição em andamento. As medidas concluídas ficam na
+lista do painel — cada uma tem um botão de excluir e **Limpar
+medições** remove todas.
+
+As medidas aparecem com a **margem de erro** (ex.: `0,52 mm ± 0,01`).
+Com 640×480 pixels, cada pixel tem um tamanho real, e é isso que a
+margem indica.
 
 Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 
@@ -304,6 +319,7 @@ Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 | `F` | Congelar/descongelar |
 | `G` | Grade (modo Bancada) |
 | `C` | Mira (modo Bancada) |
+| `L` / `A` / `O` | Régua / ângulo / círculo (modo Bancada) |
 | `H` / `V` | Espelhar horizontal / vertical |
 | `[` / `]` | Girar −90° / +90° |
 | `+` / `-` | Zoom |
@@ -312,7 +328,7 @@ Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 | `Ctrl+G` | Galeria |
 | `Ctrl+,` | Preferências |
 | `F11` | Tela cheia |
-| `Esc` | Sair da tela cheia / cancelar |
+| `Esc` | Cancelar medição em andamento / sair da tela cheia |
 | `Ctrl+?` | Lista de atalhos |
 | `Ctrl+Q` | Sair |
 
