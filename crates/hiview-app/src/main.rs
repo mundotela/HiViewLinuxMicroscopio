@@ -67,5 +67,6 @@ mod tests {
         crate::focus::tests::check();
         crate::widgets::viewport::tests::check();
         crate::app::tests::check();
+        crate::measure_ui::tests::check();
     }
 }

@@ -9,9 +9,11 @@
 use gtk::glib;
 use hiview_core::{AppConfig, MeasureSet, MeasureTool};
 use relm4::adw::prelude::*;
-use relm4::{ComponentSender, adw, gtk};
+use std::rc::Rc;
 
-use crate::app::{AppModel, Input};
+use relm4::{adw, gtk};
+
+use crate::app::Input;
 use crate::strings;
 
 /// Handles kept for [`sync`] — every widget the model needs to update
@@ -31,13 +33,17 @@ pub struct MeasurePanel {
     delete_btn: gtk::Button,
     /// One `adw::ActionRow` per committed measurement.
     list_rows: Vec<adw::ActionRow>,
+    /// Signature of what `list_rows` shows — item ids plus the active
+    /// scale: a calibration switch re-labels the same ids in mm/µm.
+    /// The list rebuilds only when this changes.
+    listed: (Vec<u64>, Option<f64>),
     /// "Limpar medições" — sensitive only with items on screen.
     clear_row: adw::ActionRow,
 }
 
 /// Builds the whole Medição group; the caller inserts it into the
 /// sidebar's `adw::PreferencesPage`.
-pub fn build(sender: &ComponentSender<AppModel>) -> (adw::PreferencesGroup, MeasurePanel) {
+pub fn build(sink: &Rc<dyn Fn(Input)>) -> (adw::PreferencesGroup, MeasurePanel) {
     let group = adw::PreferencesGroup::new();
     group.set_title(strings::MEASURE_GROUP_TITLE);
 
@@ -47,8 +53,8 @@ pub fn build(sender: &ComponentSender<AppModel>) -> (adw::PreferencesGroup, Meas
     tool_row.set_title(strings::MEASURE_TOOL_LABEL);
     tool_row.set_model(Some(&gtk::StringList::new(&strings::TOOL_NAMES)));
     let tool_handler = tool_row.connect_selected_notify({
-        let sender = sender.clone();
-        move |row| sender.input(Input::ArmMeasureIndex(row.selected()))
+        let sink = sink.clone();
+        move |row| (sink)(Input::ArmMeasureIndex(row.selected()))
     });
     group.add(&tool_row);
 
@@ -60,8 +66,8 @@ pub fn build(sender: &ComponentSender<AppModel>) -> (adw::PreferencesGroup, Meas
     add_icon.set_valign(gtk::Align::Center);
     calibrate_row.add_suffix(&add_icon);
     calibrate_row.connect_activated({
-        let sender = sender.clone();
-        move |_| sender.input(Input::StartCalibration)
+        let sink = sink.clone();
+        move |_| (sink)(Input::StartCalibration)
     });
     group.add(&calibrate_row);
 
@@ -71,21 +77,21 @@ pub fn build(sender: &ComponentSender<AppModel>) -> (adw::PreferencesGroup, Meas
     profile_row.set_title(strings::CALIBRATION_ACTIVE_LABEL);
     profile_row.set_model(Some(&profile_model));
     let profile_handler = profile_row.connect_selected_notify({
-        let sender = sender.clone();
-        move |row| sender.input(Input::SelectCalibration(row.selected()))
+        let sink = sink.clone();
+        move |row| (sink)(Input::SelectCalibration(row.selected()))
     });
 
     let rename_btn = icon_button(
         "document-edit-symbolic",
         strings::CALIBRATION_RENAME_LABEL,
         {
-            let sender = sender.clone();
-            move |_| sender.input(Input::RequestRenameCalibration)
+            let sink = sink.clone();
+            move |_| (sink)(Input::RequestRenameCalibration)
         },
     );
     let delete_btn = icon_button("user-trash-symbolic", strings::CALIBRATION_DELETE_LABEL, {
-        let sender = sender.clone();
-        move |_| sender.input(Input::RequestDeleteCalibration)
+        let sink = sink.clone();
+        move |_| (sink)(Input::RequestDeleteCalibration)
     });
     let manage = gtk::Box::new(gtk::Orientation::Horizontal, 4);
     manage.set_valign(gtk::Align::Center);
@@ -103,8 +109,8 @@ pub fn build(sender: &ComponentSender<AppModel>) -> (adw::PreferencesGroup, Meas
     clear_icon.set_valign(gtk::Align::Center);
     clear_row.add_suffix(&clear_icon);
     clear_row.connect_activated({
-        let sender = sender.clone();
-        move |_| sender.input(Input::ClearMeasurements)
+        let sink = sink.clone();
+        move |_| (sink)(Input::ClearMeasurements)
     });
     group.add(&clear_row);
 
@@ -118,6 +124,7 @@ pub fn build(sender: &ComponentSender<AppModel>) -> (adw::PreferencesGroup, Meas
         rename_btn,
         delete_btn,
         list_rows: Vec::new(),
+        listed: (Vec::new(), None),
         clear_row,
     };
     (group, panel)
@@ -144,7 +151,7 @@ pub fn sync(
     panel: &mut MeasurePanel,
     measure: &MeasureSet,
     config: &AppConfig,
-    sender: &ComponentSender<AppModel>,
+    sink: &Rc<dyn Fn(Input)>,
 ) {
     let tool_index = match measure.armed_tool() {
         None | Some(MeasureTool::Calibrate) => 0,
@@ -182,12 +189,19 @@ pub fn sync(
     panel.delete_btn.set_sensitive(has_active);
 
     // The measurement list: one row per committed item, "Limpar"
-    // re-appended last so it always sits below them.
+    // re-appended last so it always sits below them. Rebuilt only when
+    // the id set changes — gesture/hover syncs leave the DOM alone.
+    let px_per_mm = config.active_profile().map(|p| p.px_per_mm);
+    let listed: (Vec<u64>, Option<f64>) = (measure.items.iter().map(|m| m.id).collect(), px_per_mm);
+    if listed == panel.listed {
+        panel.clear_row.set_sensitive(!listed.0.is_empty());
+        return;
+    }
+    panel.listed = listed;
     for row in panel.list_rows.drain(..) {
         panel.group.remove(&row);
     }
     panel.group.remove(&panel.clear_row);
-    let px_per_mm = config.active_profile().map(|p| p.px_per_mm);
     for m in &measure.items {
         let row = adw::ActionRow::new();
         row.set_title(&m.shape.label(px_per_mm));
@@ -203,8 +217,8 @@ pub fn sync(
         del.set_tooltip_text(Some(strings::DIALOG_DELETE));
         let id = m.id;
         del.connect_clicked({
-            let sender = sender.clone();
-            move |_| sender.input(Input::DeleteMeasurement(id))
+            let sink = sink.clone();
+            move |_| (sink)(Input::DeleteMeasurement(id))
         });
         row.add_suffix(&del);
         panel.group.add(&row);
@@ -212,4 +226,97 @@ pub fn sync(
     }
     panel.clear_row.set_sensitive(!measure.items.is_empty());
     panel.group.add(&panel.clear_row);
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use hiview_core::{CalibrationProfile, MeasureGesture, Point};
+
+    use super::*;
+
+    /// The per-row delete button lives in the row's suffix box.
+    fn row_delete_button(row: &adw::ActionRow) -> gtk::Button {
+        row.first_child()
+            .and_then(|b| b.last_child())
+            .and_then(|s| s.first_child())
+            .and_then(|w| w.downcast::<gtk::Button>().ok())
+            .unwrap_or_else(|| panic!("row has a delete button in its suffix"))
+    }
+
+    fn ruler(set: &mut MeasureSet, ax: f64, bx: f64) {
+        set.gesture(MeasureGesture::Click(Point::new(ax, 10.0)));
+        set.gesture(MeasureGesture::Click(Point::new(bx, 10.0)));
+    }
+
+    /// Medição panel contract (§6.9): committed items list one row
+    /// each — delete emits `DeleteMeasurement`, "Limpar" emits
+    /// `ClearMeasurements` — and the rows re-label mm/µm when the
+    /// active calibration changes without rebuilding on hover syncs.
+    ///
+    /// NOT a `#[test]`: GTK can only init on one thread, so this runs
+    /// inside the single `crate::tests::gtk_ui_contracts`.
+    pub(crate) fn check() {
+        let emitted = Rc::new(RefCell::new(Vec::<Input>::new()));
+        let sink: Rc<dyn Fn(Input)> = {
+            let emitted = emitted.clone();
+            Rc::new(move |input| emitted.borrow_mut().push(input))
+        };
+        let (_group, mut panel) = build(&sink);
+
+        let mut set = MeasureSet::default();
+        set.arm(Some(MeasureTool::Ruler));
+        ruler(&mut set, 0.0, 100.0);
+        ruler(&mut set, 0.0, 200.0);
+        let config = AppConfig::default();
+
+        sync(&mut panel, &set, &config, &sink);
+        assert_eq!(panel.list_rows.len(), 2);
+        assert!(panel.clear_row.is_sensitive());
+        // No calibration → pixel labels.
+        assert!(panel.list_rows[0].title().ends_with("px"));
+
+        // A second sync with the same signature must not rebuild:
+        // the widget instances stay identical (hover/draft churn).
+        let first = panel.list_rows[0].clone();
+        sync(&mut panel, &set, &config, &sink);
+        assert_eq!(panel.list_rows[0], first);
+
+        // Activating a profile re-labels the same ids in mm/µm.
+        let mut config2 = AppConfig::default();
+        config2.upsert_profile(
+            CalibrationProfile::from_line(
+                Point::new(0.0, 0.0),
+                Point::new(89.0, 0.0),
+                1.0,
+                "teste".into(),
+            )
+            .unwrap_or_else(|| panic!("profile valid")),
+        );
+        sync(&mut panel, &set, &config2, &sink);
+        assert_eq!(panel.list_rows.len(), 2);
+        let title = panel.list_rows[0].title().to_string();
+        assert!(
+            title.contains("mm") || title.contains("µm"),
+            "title: {title}"
+        );
+
+        // Per-item delete and "Limpar" reach the model.
+        row_delete_button(&panel.list_rows[0]).emit_clicked();
+        panel.clear_row.emit_activate();
+        assert!(
+            emitted
+                .borrow()
+                .iter()
+                .any(|i| matches!(i, Input::DeleteMeasurement(_)))
+        );
+        assert!(
+            emitted
+                .borrow()
+                .iter()
+                .any(|i| matches!(i, Input::ClearMeasurements))
+        );
+    }
 }

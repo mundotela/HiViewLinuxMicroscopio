@@ -203,7 +203,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 | `F` | Congelar/descongelar |
 | `G` | Grade |
 | `C` | Mira |
-| `L` | Régua (Bancada) |
+| `L` / `A` / `O` | Régua / ângulo / círculo (Bancada) |
 | `H` / `V` | Espelhar horizontal / vertical |
 | `[` / `]` | Girar −90° / +90° |
 | `+` / `-` | Zoom |

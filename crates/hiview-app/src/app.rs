@@ -377,6 +377,10 @@ pub struct AppModel {
     /// The Medição panel widgets, built in `init` (list + dialogs are
     /// imperative — see `measure_ui.rs`).
     measure_panel: Option<MeasurePanel>,
+    /// Input sink handed to the imperative Medição widgets and
+    /// dialogs — `Rc` so contract tests inject a fake (the same
+    /// pattern as the popover rows).
+    measure_sink: Rc<dyn Fn(Input)>,
     /// The preferences page hosting the sidebar groups — the Medição
     /// group is added imperatively like the adjust rows.
     bench_prefs: adw::PreferencesPage,
@@ -923,6 +927,7 @@ impl SimpleComponent for AppModel {
             measure: MeasureSet::default(),
             pending_calibration: None,
             measure_panel: None,
+            measure_sink: Rc::new(|_| {}),
             bench_prefs: adw::PreferencesPage::new(),
             grid_spacing_row: adw::SpinRow::with_range(0.0, 1.0, 1.0),
         };
@@ -938,9 +943,15 @@ impl SimpleComponent for AppModel {
         model.build_adjust_ui(&widgets, &sender);
         model.maybe_apply_stored_adjust();
         // The Medição group is imperative too (dynamic list, dialogs).
-        let (measure_group, measure_panel) = crate::measure_ui::build(&sender);
+        // Its widgets need an `Rc` input sink — the popover pattern.
+        let measure_sink: Rc<dyn Fn(Input)> = Rc::new({
+            let sender = sender.clone();
+            move |input| sender.input(input)
+        });
+        let (measure_group, measure_panel) = crate::measure_ui::build(&measure_sink);
         widgets.bench_prefs.add(&measure_group);
         model.measure_panel = Some(measure_panel);
+        model.measure_sink = measure_sink;
         // Measurement gestures arrive as image coordinates from the
         // viewport's gesture controllers (§6.9).
         widgets.viewport.set_measure_handler({
@@ -948,7 +959,7 @@ impl SimpleComponent for AppModel {
             move |g| sender.input(Input::Measure(g))
         });
         model.sync_grid_unit();
-        model.sync_measure_ui(&sender);
+        model.sync_measure_ui();
         model.nav_view = widgets.nav_view.clone();
         model.nav_view.connect_popped({
             let sender = sender.clone();
@@ -1134,7 +1145,7 @@ impl SimpleComponent for AppModel {
                 // `Esc` cancels a measurement in progress before it
                 // touches fullscreen (§6.9).
                 if self.measure.cancel() {
-                    self.measure_changed(&sender);
+                    self.measure_changed();
                 } else if self.window.is_fullscreen() {
                     self.window.unfullscreen();
                 }
@@ -1319,49 +1330,46 @@ impl SimpleComponent for AppModel {
             Input::Measure(gesture) => {
                 match self.measure.gesture(gesture) {
                     MeasureCommit::CalibrationLine { a, b } => {
-                        self.open_calibration_wizard(a, b, &sender);
+                        self.open_calibration_wizard(a, b);
                     }
                     MeasureCommit::Shape(_) | MeasureCommit::Nothing => {}
                 }
                 // Hover/drag drafts live in the overlay state — every
                 // gesture refreshes the drawing.
-                self.measure_changed(&sender);
+                self.measure_changed();
             }
             Input::ArmMeasure(tool) => {
                 if self.bench_only() {
                     // Same key again disarms the tool.
                     let next = (self.measure.armed_tool() != Some(tool)).then_some(tool);
-                    self.arm_measure(next, &sender);
+                    self.arm_measure(next);
                 }
             }
             Input::ArmMeasureIndex(index) => {
                 if self.mode == AppMode::Bench {
-                    self.arm_measure(
-                        match index {
-                            1 => Some(MeasureTool::Ruler),
-                            2 => Some(MeasureTool::Angle),
-                            3 => Some(MeasureTool::Circle),
-                            _ => None,
-                        },
-                        &sender,
-                    );
+                    self.arm_measure(match index {
+                        1 => Some(MeasureTool::Ruler),
+                        2 => Some(MeasureTool::Angle),
+                        3 => Some(MeasureTool::Circle),
+                        _ => None,
+                    });
                 }
             }
             Input::DeleteMeasurement(id) => {
                 if self.measure.remove(id) {
-                    self.measure_changed(&sender);
+                    self.measure_changed();
                 }
             }
             Input::ClearMeasurements => {
                 if !self.measure.items.is_empty() {
                     self.measure.clear();
-                    self.measure_changed(&sender);
+                    self.measure_changed();
                 }
             }
             Input::StartCalibration => {
                 if self.bench_only() {
                     if self.state == CameraState::Streaming {
-                        self.arm_measure(Some(MeasureTool::Calibrate), &sender);
+                        self.arm_measure(Some(MeasureTool::Calibrate));
                     } else {
                         self.show_toast(adw::Toast::new(strings::MEASURE_NO_FRAME));
                     }
@@ -1372,7 +1380,7 @@ impl SimpleComponent for AppModel {
                     let old_ppm = self.active_px_per_mm();
                     if let Some(profile) = CalibrationProfile::from_line(a, b, mm, name.clone()) {
                         self.config.upsert_profile(profile);
-                        self.calibration_changed(old_ppm, &sender);
+                        self.calibration_changed(old_ppm);
                         tracing::info!("calibration profile created: {name}");
                     }
                 }
@@ -1385,7 +1393,7 @@ impl SimpleComponent for AppModel {
                     .map(|p| p.name.clone());
                 if self.config.active_calibration != name {
                     self.config.active_calibration = name;
-                    self.calibration_changed(old_ppm, &sender);
+                    self.calibration_changed(old_ppm);
                 }
             }
             Input::RequestRenameCalibration => {
@@ -1402,7 +1410,7 @@ impl SimpleComponent for AppModel {
                         &self.viewport,
                         &current,
                         others,
-                        &sender,
+                        &self.measure_sink,
                     );
                 }
             }
@@ -1422,7 +1430,7 @@ impl SimpleComponent for AppModel {
                     }
                     self.config.active_calibration = Some(trimmed.to_string());
                     self.persist_config();
-                    self.sync_measure_ui(&sender);
+                    self.sync_measure_ui();
                 }
             }
             Input::RequestDeleteCalibration => {
@@ -1430,7 +1438,7 @@ impl SimpleComponent for AppModel {
                     crate::measure_dialogs::confirm_delete_profile(
                         &self.window,
                         &active.name.clone(),
-                        &sender,
+                        &self.measure_sink,
                     );
                 }
             }
@@ -1438,7 +1446,7 @@ impl SimpleComponent for AppModel {
                 let old_ppm = self.active_px_per_mm();
                 if let Some(name) = self.config.active_calibration.clone() {
                     self.config.remove_profile(&name);
-                    self.calibration_changed(old_ppm, &sender);
+                    self.calibration_changed(old_ppm);
                     tracing::info!("calibration profile deleted: {name}");
                 }
             }
@@ -1528,33 +1536,33 @@ impl AppModel {
 
     /// Measurement state changed (gesture, arm, delete, cancel): push
     /// the overlay snapshot and resync the side-panel list.
-    fn measure_changed(&mut self, sender: &ComponentSender<Self>) {
+    fn measure_changed(&mut self) {
         self.apply_overlays();
-        self.sync_measure_ui(sender);
+        self.sync_measure_ui();
     }
 
     /// Arms/disarms the measurement tool: while armed the viewport
     /// routes primary clicks/drags to the session and pans on the
     /// middle button (§6.9). Arming also drops a pending wizard line.
-    fn arm_measure(&mut self, tool: Option<MeasureTool>, sender: &ComponentSender<Self>) {
+    fn arm_measure(&mut self, tool: Option<MeasureTool>) {
         if tool != Some(MeasureTool::Calibrate) {
             self.pending_calibration = None;
         }
         self.measure.arm(tool);
         self.viewport.set_measure_tool(tool);
-        self.measure_changed(sender);
+        self.measure_changed();
     }
 
     /// Pushes measurement + calibration state into the side panel.
-    fn sync_measure_ui(&mut self, sender: &ComponentSender<Self>) {
+    fn sync_measure_ui(&mut self) {
         if let Some(panel) = self.measure_panel.as_mut() {
-            crate::measure_ui::sync(panel, &self.measure, &self.config, sender);
+            crate::measure_ui::sync(panel, &self.measure, &self.config, &self.measure_sink);
         }
     }
 
     /// The active calibration changed (select/create/delete): rekey
     /// grid and tick spacings to the new unit, persist, refresh.
-    fn calibration_changed(&mut self, old_ppm: Option<f64>, sender: &ComponentSender<Self>) {
+    fn calibration_changed(&mut self, old_ppm: Option<f64>) {
         let new_ppm = self.active_px_per_mm();
         self.config.overlays.grid.spacing =
             self.config.overlays.grid.spacing.rekeyed(old_ppm, new_ppm);
@@ -1567,12 +1575,12 @@ impl AppModel {
         self.persist_config();
         self.apply_overlays();
         self.sync_grid_unit();
-        self.sync_measure_ui(sender);
+        self.sync_measure_ui();
     }
 
     /// The reference line was drawn: remember it and open the wizard,
     /// then disarm — the next tool arming starts a fresh session.
-    fn open_calibration_wizard(&mut self, a: Point, b: Point, sender: &ComponentSender<Self>) {
+    fn open_calibration_wizard(&mut self, a: Point, b: Point) {
         self.pending_calibration = Some((a, b));
         let existing: Vec<String> = self
             .config
@@ -1586,9 +1594,9 @@ impl AppModel {
             hiview_core::distance(a, b),
             existing,
             strings::calibration_default_name(self.config.calibration.len() + 1),
-            sender,
+            &self.measure_sink,
         );
-        self.arm_measure(None, sender);
+        self.arm_measure(None);
     }
 
     /// Grid spacing row title — the unit follows the calibration (§6.9).

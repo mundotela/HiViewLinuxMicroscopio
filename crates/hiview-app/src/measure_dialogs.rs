@@ -7,9 +7,11 @@
 //! on close (CONVENTIONS §7).
 
 use relm4::adw::prelude::*;
-use relm4::{ComponentSender, adw, gtk};
+use std::rc::Rc;
 
-use crate::app::{AppModel, Input};
+use relm4::{adw, gtk};
+
+use crate::app::Input;
 use crate::strings;
 use crate::widgets::viewport::Viewport;
 
@@ -123,7 +125,7 @@ pub fn open_calibration_dialog(
     line_px: f64,
     existing_names: Vec<String>,
     default_name: String,
-    sender: &ComponentSender<AppModel>,
+    sink: &Rc<dyn Fn(Input)>,
 ) {
     let line_row = adw::ActionRow::new();
     line_row.set_title(&strings::calibration_line_label(line_px));
@@ -143,11 +145,11 @@ pub fn open_calibration_dialog(
     );
 
     form.confirm.connect_clicked({
-        let sender = sender.clone();
+        let sink = sink.clone();
         let name = form.name.clone();
         let dialog = form.dialog.clone();
         move |_| {
-            sender.input(Input::CommitCalibration {
+            (sink)(Input::CommitCalibration {
                 name: name.text().to_string(),
                 mm: mm.value(),
             });
@@ -163,7 +165,7 @@ pub fn open_rename_dialog(
     viewport: &Viewport,
     current_name: &str,
     existing_names: Vec<String>,
-    sender: &ComponentSender<AppModel>,
+    sink: &Rc<dyn Fn(Input)>,
 ) {
     let form = form_dialog(
         window,
@@ -179,11 +181,11 @@ pub fn open_rename_dialog(
     );
     form.name.select_region(0, -1);
     form.confirm.connect_clicked({
-        let sender = sender.clone();
+        let sink = sink.clone();
         let name = form.name.clone();
         let dialog = form.dialog.clone();
         move |_| {
-            sender.input(Input::CalibrationRenamed(name.text().to_string()));
+            (sink)(Input::CalibrationRenamed(name.text().to_string()));
             dialog.close();
         }
     });
@@ -193,7 +195,7 @@ pub fn open_rename_dialog(
 pub fn confirm_delete_profile(
     window: &adw::ApplicationWindow,
     name: &str,
-    sender: &ComponentSender<AppModel>,
+    sink: &Rc<dyn Fn(Input)>,
 ) {
     let dialog = adw::AlertDialog::new(
         Some(strings::CALIBRATION_DELETE_TITLE),
@@ -204,10 +206,10 @@ pub fn confirm_delete_profile(
     dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
     dialog.set_default_response(Some("cancel"));
     dialog.set_close_response("cancel");
-    let sender = sender.clone();
+    let sink = sink.clone();
     dialog.choose(Some(window), gtk::gio::Cancellable::NONE, move |response| {
         if response == "delete" {
-            sender.input(Input::DeleteCalibration);
+            (sink)(Input::DeleteCalibration);
         }
     });
 }
