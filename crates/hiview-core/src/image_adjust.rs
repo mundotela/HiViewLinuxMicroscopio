@@ -59,18 +59,117 @@ impl AdjustPlan {
     }
 
     /// Applies the plan in place over an RGBA8 frame (`stride` bytes per
-    /// row, `width`×`height` pixels, alpha untouched).
+    /// row, `width`×`height` pixels, alpha untouched). With sharpen on,
+    /// [`Self::apply_fused`] produces every stage in one pass; otherwise
+    /// only the per-pixel stage runs. Everything runs on the calling
+    /// thread — the §7 CPU budget counts the time of every thread, so
+    /// workers could hide latency but never cost.
     pub fn apply(&self, data: &mut [u8], width: usize, height: usize, stride: usize) {
-        if self.lut.is_some() || self.sat_q != 256 {
-            self.apply_lut_and_saturation(data, width, height, stride);
-        }
         if self.sharpen_q != 0 {
-            self.apply_unsharp(data, width, height, stride);
+            self.apply_fused(data, width, height, stride);
+        } else if self.lut.is_some() || self.sat_q != 256 {
+            self.apply_lut_and_saturation(data, width, height, stride);
         }
     }
 
-    /// Stage 1+2 fused per pixel: LUT on each channel, then pull each
-    /// channel toward (sat < 1) or away from (sat > 1) its BT.601 luma.
+    /// The whole plan in one pass when sharpen is on: a three-row ring
+    /// holds the stage-1 pixels of rows y−1, y, y+1 — as it advances,
+    /// the next row's stage-1 version is produced on the fly and the
+    /// unsharp output of the current row is written back. No extra
+    /// pass over the frame and no full-frame copy: the working set
+    /// stays hot in cache, which is what the §7 CPU budget sees.
+    ///
+    /// Unsharp mask `out = v + k·(v − avg4)` with `k = sharpen_q/256`,
+    /// computed as `v + (4v − Σ4)·q/1024` so 100 % reproduces the
+    /// classic full-strength unsharp. Border rows and columns replicate
+    /// the edge pixel.
+    fn apply_fused(&self, data: &mut [u8], width: usize, height: usize, stride: usize) {
+        let mut ring = [vec![0u8; stride], vec![0u8; stride], vec![0u8; stride]];
+        // ring[r % 3] holds the stage-1 pixels of row r. Row 0 doubles
+        // as the clamped `up` row of y=0.
+        self.stage1_row(&data[..stride], &mut ring[0], width);
+        let q = self.sharpen_q;
+        for y in 0..height {
+            // Row y+1 is still untouched in `data`; write its stage-1
+            // version into the ring before row y is overwritten. At the
+            // last row `dn` clamps to y itself.
+            let dn_row = (y + 1).min(height - 1);
+            self.stage1_row(
+                &data[dn_row * stride..dn_row * stride + stride],
+                &mut ring[dn_row % 3],
+                width,
+            );
+            let (up, me, dn) = (
+                &ring[y.saturating_sub(1) % 3],
+                &ring[y % 3],
+                &ring[dn_row % 3],
+            );
+            let out = &mut data[y * stride..y * stride + stride];
+            for x in 0..width {
+                let lf = x.saturating_sub(1) * 4;
+                let cc = x * 4;
+                let rt = (x + 1).min(width - 1) * 4;
+                for c in 0..3 {
+                    let v = i32::from(me[cc + c]);
+                    let edge = 4 * v
+                        - (i32::from(up[cc + c])
+                            + i32::from(dn[cc + c])
+                            + i32::from(me[lf + c])
+                            + i32::from(me[rt + c]));
+                    out[cc + c] = clamp_u8(v + ((edge * q) >> 10));
+                }
+            }
+        }
+    }
+
+    /// Writes the stage-1 version of `srow` into `drow` — the verbatim
+    /// row when LUT and saturation are both neutral.
+    fn stage1_row(&self, srow: &[u8], drow: &mut [u8], width: usize) {
+        if self.lut.is_some() || self.sat_q != 256 {
+            self.ls_row(srow, drow, width);
+        } else {
+            drow.copy_from_slice(srow);
+        }
+    }
+
+    /// One row of stage 1+2 read `srow` → write `drow`: LUT on each
+    /// channel, then the saturation pull toward/away from BT.601 luma.
+    /// Reading and writing different buffers lets stage 1 feed the
+    /// unsharp ring without a separate pass over the frame.
+    fn ls_row(&self, srow: &[u8], drow: &mut [u8], width: usize) {
+        for (s, d) in srow[..width * 4]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(drow[..width * 4].as_chunks_mut::<4>().0.iter_mut())
+        {
+            d[3] = s[3];
+            let (r, g, b) = match &self.lut {
+                Some(lut) => (
+                    lut[usize::from(s[0])],
+                    lut[usize::from(s[1])],
+                    lut[usize::from(s[2])],
+                ),
+                None => (s[0], s[1], s[2]),
+            };
+            if self.sat_q == 256 {
+                d[0] = r;
+                d[1] = g;
+                d[2] = b;
+            } else {
+                let (r, g, b) = (i32::from(r), i32::from(g), i32::from(b));
+                let luma = (r * LUMA_R + g * LUMA_G + b * LUMA_B) >> 8;
+                d[0] = clamp_u8(luma + (((r - luma) * self.sat_q) >> 8));
+                d[1] = clamp_u8(luma + (((g - luma) * self.sat_q) >> 8));
+                d[2] = clamp_u8(luma + (((b - luma) * self.sat_q) >> 8));
+            }
+        }
+    }
+
+    /// Stage 1+2 fused per pixel, in place: LUT on each channel, then
+    /// pull each channel toward (sat < 1) or away from (sat > 1) its
+    /// BT.601 luma. Used when sharpen is off — no neighbourhood is
+    /// needed, so no ring exists.
     fn apply_lut_and_saturation(
         &self,
         data: &mut [u8],
@@ -92,35 +191,6 @@ impl AdjustPlan {
                     px[0] = clamp_u8(luma + (((r - luma) * self.sat_q) >> 8));
                     px[1] = clamp_u8(luma + (((g - luma) * self.sat_q) >> 8));
                     px[2] = clamp_u8(luma + (((b - luma) * self.sat_q) >> 8));
-                }
-            }
-        }
-    }
-
-    /// Stage 3: unsharp mask `out = v + k·(v − avg4)` with
-    /// `k = sharpen_q/256`. Computed as `v + (4v − Σ4)·q/1024` so 100 %
-    /// reproduces the classic full-strength unsharp. Reads the
-    /// post-stage-1 frame from a copy (neighbours must be the already
-    /// adjusted values) and clamps neighbour indices at the borders.
-    fn apply_unsharp(&self, data: &mut [u8], width: usize, height: usize, stride: usize) {
-        let src = data.to_vec();
-        let q = self.sharpen_q;
-        for y in 0..height {
-            let up = y.saturating_sub(1) * stride;
-            let me = y * stride;
-            let dn = (y + 1).min(height - 1) * stride;
-            for x in 0..width {
-                let lf = x.saturating_sub(1) * 4;
-                let cc = x * 4;
-                let rt = (x + 1).min(width - 1) * 4;
-                for c in 0..3 {
-                    let v = i32::from(src[me + cc + c]);
-                    let edge = 4 * v
-                        - (i32::from(src[up + cc + c])
-                            + i32::from(src[dn + cc + c])
-                            + i32::from(src[me + lf + c])
-                            + i32::from(src[me + rt + c]));
-                    data[me + cc + c] = clamp_u8(v + ((edge * q) >> 10));
                 }
             }
         }
