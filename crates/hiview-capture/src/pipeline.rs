@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 use gst::prelude::*;
 use tracing::{debug, warn};
 
-use hiview_core::Orientation;
+use hiview_core::{ImageAdjust, Orientation};
 
 use crate::device::CameraDescriptor;
 use crate::error::Error;
@@ -48,6 +48,9 @@ pub struct CapturePipeline {
     source: CaptureSource,
     dev_node: Option<PathBuf>,
     flip: Option<gst::Element>,
+    balance: Option<gst::Element>,
+    gamma: Option<gst::Element>,
+    sharpen: Option<gst::Element>,
     bus_thread: Option<JoinHandle<()>>,
 }
 
@@ -79,6 +82,9 @@ impl CapturePipeline {
                 _ => None,
             },
             flip: pipeline.by_name("flip"),
+            balance: pipeline.by_name("balance"),
+            gamma: pipeline.by_name("gamma"),
+            sharpen: pipeline.by_name("sharpen"),
             pipeline,
             frame_bus,
             source,
@@ -124,6 +130,37 @@ impl CapturePipeline {
                 Orientation::AntiTranspose => gst_video::VideoOrientationMethod::UrLl,
             },
         );
+    }
+
+    /// Applies the software image adjustments live (docs/ARCHITECTURE.md
+    /// §6.11): plain property writes on `videobalance`, `gamma` and
+    /// `gaussianblur` — the pipeline keeps playing, so screen, photo and
+    /// video all show them. At neutral defaults the elements run in
+    /// passthrough and cost nothing.
+    pub fn set_adjust(&self, adjust: &ImageAdjust) {
+        if let Some(balance) = &self.balance {
+            balance.set_property("brightness", adjust.brightness);
+            balance.set_property("contrast", adjust.contrast);
+            balance.set_property("saturation", adjust.saturation);
+        }
+        if let Some(gamma) = &self.gamma {
+            gamma.set_property("gamma", adjust.gamma);
+        }
+        if let Some(sharpen) = &self.sharpen {
+            sharpen.set_property("sigma", adjust.sharpen_sigma());
+        }
+    }
+
+    /// Whether this pipeline contains the `gaussianblur` sharpen element.
+    #[must_use]
+    pub fn has_sharpen(&self) -> bool {
+        self.sharpen.is_some()
+    }
+
+    /// Looks up a named element inside the pipeline (tests/diagnostics).
+    #[must_use]
+    pub fn element_by_name(&self, name: &str) -> Option<gst::Element> {
+        self.pipeline.by_name(name)
     }
 }
 
@@ -242,6 +279,71 @@ fn extract_frame(sink: &gst_app::AppSink) -> Result<Option<Frame>, String> {
     }))
 }
 
+/// Whether the `gaussianblur` element (gst-plugins-bad `gaudieffects`)
+/// exists on this system. The sharpen branch and its UI control are
+/// only present when it is (docs/ARCHITECTURE.md §6.11).
+#[must_use]
+pub fn sharpen_available() -> bool {
+    crate::init().is_ok() && gst::ElementFactory::find("gaussianblur").is_some()
+}
+
+/// Builds the shared tail every source feeds
+/// (docs/ARCHITECTURE.md §6.2):
+///
+/// ```text
+/// videoconvert ! video/x-raw,format=YUY2      (normalize for the filters)
+///   ! videobalance (brightness/contrast/saturation, §6.11)
+///   ! gamma (§6.11)
+///   ! [videoconvert ! gaussianblur]           (sharpen, §6.11 — optional)
+///   ! videoconvert ! videoflip ! appsink
+/// ```
+///
+/// With every adjustment at its default, `videobalance`/`gamma` run in
+/// passthrough and `gaussianblur` collapses to a 1×1 kernel — the tail
+/// then costs no more than the plain convert+flip chain it replaces,
+/// which beats dynamically relinking a bypass branch (the failure mode
+/// ADR-006 was chosen to avoid).
+fn build_adjust_tail(
+    frame_bus: &FrameBus,
+    sync: bool,
+    skip_first: u64,
+) -> Result<Vec<gst::Element>, Error> {
+    let appsink = build_appsink(frame_bus, sync, skip_first).upcast::<gst::Element>();
+    let convert = make("videoconvert")?;
+    // Balance and gamma work natively on the 16-bit YUY2 the microscope
+    // delivers; pinning it keeps their active path cheap and the
+    // negotiated formats deterministic across sources.
+    let normalize = caps_filter(
+        gst::Caps::builder("video/x-raw")
+            .field("format", MICROSCOPE_FORMAT)
+            .build(),
+    )?;
+    let balance = make("videobalance")?;
+    balance.set_property("name", "balance");
+    let gamma = make("gamma")?;
+    gamma.set_property("name", "gamma");
+    let mut tail = vec![convert, normalize, balance, gamma];
+    if sharpen_available() {
+        // gaussianblur only accepts AYUV: the converters around it are
+        // the cost of admission — together a no-op at sigma 0.
+        let to_ayuv = make("videoconvert")?;
+        let sharpen = make("gaussianblur")?;
+        sharpen.set_property("name", "sharpen");
+        sharpen.set_property("sigma", 0.0);
+        tail.push(to_ayuv);
+        tail.push(sharpen);
+    } else {
+        warn!("gaussianblur unavailable: sharpen control disabled");
+    }
+    let to_rgba = make("videoconvert")?;
+    // Kept last in every source so `set_orientation` can swap
+    // `video-direction` live (docs/ARCHITECTURE.md §6.4).
+    let flip = make("videoflip")?;
+    flip.set_property("name", "flip");
+    tail.extend([to_rgba, flip, appsink]);
+    Ok(tail)
+}
+
 fn build_pipeline(source: &CaptureSource, frame_bus: &FrameBus) -> Result<gst::Pipeline, Error> {
     let pipeline = gst::Pipeline::builder().name("hiview-capture").build();
     let sync = matches!(source, CaptureSource::File(_));
@@ -249,12 +351,9 @@ fn build_pipeline(source: &CaptureSource, frame_bus: &FrameBus) -> Result<gst::P
         CaptureSource::Device(_) => DEVICE_WARMUP_FRAMES,
         _ => 0,
     };
-    let appsink = build_appsink(frame_bus, sync, skip_first).upcast::<gst::Element>();
-    let convert = make("videoconvert")?;
-    // Kept between convert and appsink in every source so `set_orientation`
-    // can swap `video-direction` live (docs/ARCHITECTURE.md §6.4).
-    let flip = make("videoflip")?;
-    flip.set_property("name", "flip");
+    let tail = build_adjust_tail(frame_bus, sync, skip_first)?;
+    let tail_head = tail[0].clone();
+    pipeline.add_many(&tail)?;
 
     match source {
         CaptureSource::Test => {
@@ -262,30 +361,30 @@ fn build_pipeline(source: &CaptureSource, frame_bus: &FrameBus) -> Result<gst::P
             src.set_property("is-live", true);
             src.set_property_from_str("pattern", "ball");
             let caps = caps_filter(microscope_caps())?;
-            pipeline.add_many([&src, &caps, &convert, &flip, &appsink])?;
-            gst::Element::link_many([&src, &caps, &convert, &flip, &appsink])?;
+            pipeline.add_many([&src, &caps])?;
+            gst::Element::link_many([&src, &caps].into_iter().chain(tail.iter()))?;
         }
         CaptureSource::Device(desc) => {
             let src = make("v4l2src")?;
             src.set_property("device", desc.dev_node.to_string_lossy().as_ref());
             src.set_property("do-timestamp", true);
-            pipeline.add_many([&src, &convert, &flip, &appsink])?;
+            pipeline.add(&src)?;
             if desc.is_microscope {
                 let caps = caps_filter(microscope_caps())?;
                 pipeline.add(&caps)?;
-                gst::Element::link_many([&src, &caps, &convert, &flip, &appsink])?;
+                gst::Element::link_many([&src, &caps].into_iter().chain(tail.iter()))?;
             } else {
-                gst::Element::link_many([&src, &convert, &flip, &appsink])?;
+                gst::Element::link_many([&src].into_iter().chain(tail.iter()))?;
             }
         }
         CaptureSource::File(path) => {
             let src = make("filesrc")?;
             src.set_property("location", path.to_string_lossy().as_ref());
             let decodebin = make("decodebin")?;
-            pipeline.add_many([&src, &decodebin, &convert, &flip, &appsink])?;
+            pipeline.add_many([&src, &decodebin])?;
             gst::Element::link_many([&src, &decodebin])?;
-            gst::Element::link_many([&convert, &flip, &appsink])?;
-            link_decodebin_dynamically(&decodebin, &convert);
+            gst::Element::link_many(&tail)?;
+            link_decodebin_dynamically(&decodebin, &tail_head);
         }
     }
 
