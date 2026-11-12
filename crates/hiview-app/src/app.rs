@@ -1398,14 +1398,22 @@ impl AppModel {
     }
 
     /// Takes a photo from the frozen/latest frame (section 6.6). Works
-    /// while recording — photos are still allowed (M4).
+    /// while recording — photos are still allowed (M4). When "Gravar
+    /// sobreposições na foto" is on, the visible overlays are burned in
+    /// (frozen-frame photos included — `photo_frame` already picks the
+    /// frozen frame).
     fn take_photo(&mut self) {
         if self.state == CameraState::Streaming
             && let Some(frame) = self.viewport.photo_frame()
         {
+            let overlays = if self.config.photo.burn_overlays {
+                overlays_for(self.mode, &self.config.overlays)
+            } else {
+                None
+            };
             if self
                 .photos
-                .take(&frame, &self.config.photo, self.photo_dir())
+                .take(&frame, &self.config.photo, self.photo_dir(), overlays)
                 .is_ok()
             {
                 self.flash_shutter();
@@ -1747,6 +1755,15 @@ impl AppModel {
         folder_row.set_activatable_widget(Some(&pick));
         group.add(&folder_row);
         self.pref_folder_row = Some(folder_row);
+
+        let burn_row = adw::SwitchRow::new();
+        burn_row.set_title(strings::PREFS_BURN_LABEL);
+        burn_row.set_active(self.config.photo.burn_overlays);
+        burn_row.connect_active_notify({
+            let sender = sender.clone();
+            move |row| sender.input(Input::SetBurnOverlays(row.is_active()))
+        });
+        group.add(&burn_row);
 
         page.add(&group);
         dialog.add(&page);

@@ -6,6 +6,8 @@
 //! `Viewport` snapshot hook and by the photo burn-in. `tools/` is
 //! reserved for the M8 measurement tools.
 
+mod burn;
 mod renderer;
 
+pub use burn::burn_in;
 pub use renderer::OverlayRenderer;

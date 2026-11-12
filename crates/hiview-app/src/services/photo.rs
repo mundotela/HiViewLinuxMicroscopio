@@ -10,8 +10,10 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 
 use hiview_capture::Frame;
-use hiview_core::{PhotoConfig, save_photo};
+use hiview_core::{OverlayState, PhotoConfig, Size, save_photo_with};
 use relm4::gtk::glib;
+
+use crate::overlay::burn_in;
 
 /// Result of one save job, reported back to the UI.
 #[derive(Debug)]
@@ -42,6 +44,8 @@ struct PhotoJob {
     stride: usize,
     prefs: PhotoConfig,
     dir: PathBuf,
+    /// Overlays to burn into the photo (§6.6), already mode-filtered.
+    overlays: Option<OverlayState>,
 }
 
 /// Handle to the background photo worker.
@@ -62,7 +66,7 @@ impl PhotoService {
             .name("hiview-photo".into())
             .spawn(move || {
                 while let Ok(job) = rx.recv() {
-                    let outcome = save_photo(
+                    let outcome = save_photo_with(
                         &job.data,
                         job.width,
                         job.height,
@@ -70,6 +74,16 @@ impl PhotoService {
                         job.prefs.resolution,
                         job.prefs.format,
                         &job.dir,
+                        |image| {
+                            if let Some(state) = &job.overlays {
+                                let source = Size::new(f64::from(job.width), f64::from(job.height));
+                                *image = burn_in(
+                                    std::mem::replace(image, image::RgbaImage::new(0, 0)),
+                                    source,
+                                    state,
+                                );
+                            }
+                        },
                     )
                     .map_or_else(|e| PhotoOutcome::Failed(e.to_string()), PhotoOutcome::Saved);
                     on_done(outcome);
@@ -86,6 +100,9 @@ impl PhotoService {
     /// buffer is refcounted. Returns [`TakeRejected::Busy`] when the
     /// queue is full — the shot is dropped, never deferred silently.
     ///
+    /// `overlays` are burned into the saved image by the same renderer
+    /// the viewport uses (ADR-012); pass `None` for a clean photo.
+    ///
     /// # Errors
     /// Returns [`TakeRejected`] when the job could not be queued.
     pub fn take(
@@ -93,6 +110,7 @@ impl PhotoService {
         frame: &Frame,
         prefs: &PhotoConfig,
         dir: PathBuf,
+        overlays: Option<OverlayState>,
     ) -> Result<(), TakeRejected> {
         let job = PhotoJob {
             data: frame.data.clone(),
@@ -101,6 +119,7 @@ impl PhotoService {
             stride: frame.stride,
             prefs: prefs.clone(),
             dir,
+            overlays,
         };
         match self.jobs.try_send(job) {
             Ok(()) => Ok(()),
@@ -143,11 +162,14 @@ mod tests {
         let dir = PathBuf::from("/tmp");
         for _ in 0..PHOTO_QUEUE_CAPACITY {
             service
-                .take(&frame(), &prefs, dir.clone())
+                .take(&frame(), &prefs, dir.clone(), None)
                 .unwrap_or_else(|e| panic!("queue should accept: {e:?}"));
         }
         // Receiver alive but never drained → the next shot is rejected.
-        assert_eq!(service.take(&frame(), &prefs, dir), Err(TakeRejected::Busy));
+        assert_eq!(
+            service.take(&frame(), &prefs, dir, None),
+            Err(TakeRejected::Busy)
+        );
         drop(rx);
     }
 }
