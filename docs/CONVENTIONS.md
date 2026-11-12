@@ -121,6 +121,8 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - Callbacks do GStreamer (`appsink`, bus em thread) **não tocam em widgets**. Eles enviam mensagens pelo `ComponentSender`/`Sender`.
 - **Nunca segure um `borrow` de `RefCell`/`Mutex` durante uma chamada ao GTK ou ao GStreamer.** Copie o que precisa, solte o borrow e só então chame. O GTK pode reentrar no nosso código pela mesma pilha, e um pânico dentro de um callback do GTK não se recupera: o app **aborta** (crash do M5). Em callbacks de factory (`setup`/`bind`/`unbind`/`teardown`), use `try_borrow` e adie com `glib::idle_add_local_once` em vez de entrar em pânico.
 - **Widgets reciclados (`GridView`/`ListView`):** nunca guarde referência a um widget de item, nem pendure popover ou diálogo nele. Resolva o item pelo **dado do modelo** (ex.: o caminho do arquivo) no momento da ação, e apresente diálogos na janela. Widgets de item não devem ser alvo do ponteiro (`can_target=false`): o GTK 4.14 tem um bug com widgets desparentados sob o cursor (`Gtk-CRITICAL gtk_widget_compute_point`). Gestos e menus ficam na grade, que é permanente.
+- **Threads externas → UI:** callbacks de worker ou de GStreamer enviam mensagens com `input_sender().send(...)`, **descartando o erro**. Nunca use `sender.input(...)` nesses callbacks: ele entra em pânico se a UI já foi encerrada (bug encontrado no M6, presente desde o M2, que aparecia ao fechar o app com a câmera transmitindo).
+- **Foco do teclado:** os atalhos de uma tecla (G, C, M, Espaço…) não funcionam enquanto um campo editável tem o foco. Depois de qualquer diálogo ou popover fechar, ou quando o usuário termina de editar um campo (Enter ou ponteiro saindo do painel), o foco volta para a viewport. Clicar no vídeo sempre devolve o foco à viewport. Botões que não precisam de foco (seletores de modo, Galeria) usam `focusable=false`.
 - **Critério de aceite de UI:** zero linhas `Gtk-CRITICAL`, `Gdk-CRITICAL` ou `panicked` no log de uma sessão completa de uso.
 
 ---
@@ -167,7 +169,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 
 ## 11.0 Medições e testes manuais
 
-- Toda medição de CPU/fps citada em relatório é feita em **build release** (`cargo run --release`) e diz isso explicitamente. Números em debug só valem como informação adicional.
+- Toda medição de CPU/fps citada em relatório é feita em **build release** (`cargo run --release`), **na sessão Wayland nativa** (não em XWayland/`GDK_BACKEND=x11`, que acrescenta ~10–14 pontos ao mesmo binário), sem ferramentas de captura de tela ou injeção de teclas rodando durante a amostragem, e diz isso explicitamente. Números em debug só valem como informação adicional.
 - Uma instância do app entregue ao Henrique para teste manual **nunca** roda com `timeout` nem é encerrada pelo Devin sem aviso. Se precisar de uma instância temporária para medição, use outra janela/instância e avise.
 
 ## 11.1 Segurança na máquina local

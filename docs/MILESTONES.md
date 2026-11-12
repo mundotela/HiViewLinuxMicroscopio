@@ -186,6 +186,8 @@ Engenharia (Henrique + Claude)          Devin Local
 
 ## M7 — Ajustes de imagem (por software)
 
+> **Incluído a partir da revisão do M6:** generalizar o retorno de foco (`install_focus_return`) para todo `adw::Dialog` e `gtk::Popover` do app, já que o M7 traz controles deslizantes e campos editáveis no painel.
+
 O microscópio não tem controles V4L2. Os ajustes são feitos no pipeline (`ARCHITECTURE.md §6.11`).
 
 **Escopo:** brilho, contraste, saturação, gama e nitidez no painel Bancada (no Explorar, só brilho e contraste), com restaurar padrões e persistência por dispositivo.
@@ -277,3 +279,4 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 - Reportar ao GTK o bug de `translate_coordinates` sem checagem de `native == NULL` (crossing events sobre widgets desparentados; presente no 4.14.5 e no 4.18.6). Evidência em `docs/reports/M5.md`.
 - Galeria: `gio::FileMonitor` para refletir alterações externas nas pastas em tempo real (hoje, a lista é atualizada ao abrir).
 - Galeria: seleção múltipla e arrastar-e-soltar.
+- **Áudio na gravação (decidido em 2026-11-11):** gravar o microfone do notebook junto com o vídeo, para narração. **Desligado por padrão**; o usuário liga por uma opção (interruptor na gravação e/ou Preferências → Vídeo). Indicador visível enquanto o áudio estiver sendo gravado. A definir na hora de implementar: o formato do áudio no MP4 (provavelmente Opus, compatível com o player do sistema) e a escolha do microfone quando houver mais de um.
