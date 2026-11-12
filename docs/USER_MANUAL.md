@@ -264,7 +264,7 @@ tela.
 **Como calibrar:**
 
 1. Coloque sob o microscópio uma **lâmina de calibração** e foque. A melhor referência é a **cruz com divisões de 0,1 mm**; nas ampliações menores, use a régua de 40 mm da lâmina. Sem lâmina, uma régua milimetrada comum também serve, com menos precisão.
-2. Painel Bancada → **Calibrar**.
+2. Painel Bancada → Medição → **Nova calibração…**.
 3. Desenhe uma linha sobre uma distância conhecida, de preferência longa (por exemplo, 10 divisões da cruz = 1,0 mm). Quanto maior a distância, menor o erro.
 4. Digite a distância real (ex.: `1` mm) e dê um nome ao perfil (ex.: "Anel no máximo, altura baixa").
 5. Pronto: as medidas passam a sair em mm/µm.
