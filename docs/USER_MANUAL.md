@@ -44,6 +44,10 @@ O HiView é honesto sobre isso: quando você escolhe salvar em resolução maior
 
 ## 3. Instalação
 
+**Requisito de processador:** x86-64 com SSE4.2 (Intel a partir de
+~2009, AMD a partir de ~2011). Se o HiView não abrir em um computador
+muito antigo, esse é o motivo mais provável.
+
 ### 3.1 Programa principal
 
 ```bash

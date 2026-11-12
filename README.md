@@ -10,6 +10,10 @@ e manual do usuário.
 
 Pop!_OS / Ubuntu 24.04 ou superior, com:
 
+- Processador **x86-64 com SSE4.2** (Intel a partir de ~2009, AMD a
+  partir de ~2011) — o build de release compila com
+  `target-cpu=x86-64-v2` (`.cargo/config.toml`), usado pelo passe de
+  ajuste de imagem do M7
 - GTK **4.14** ou superior
 - libadwaita **1.5** ou superior
 - GStreamer **1.24** ou superior
