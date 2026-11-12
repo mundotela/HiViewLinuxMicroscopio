@@ -3,7 +3,9 @@
 
 //! Root application component (docs/CONVENTIONS.md §4).
 
+use std::cell::Cell;
 use std::collections::VecDeque;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -12,8 +14,9 @@ use hiview_capture::{
     check_disk_space,
 };
 use hiview_core::{
-    AppConfig, AppMode, CrosshairStyle, GridSpacing, OverlayColor, PhotoFormat, PhotoResolution,
-    ViewOrientation, config_path, load_config, overlays_for, save_config,
+    AdjustKind, AppConfig, AppMode, CrosshairStyle, GridSpacing, ImageAdjust, OverlayColor,
+    PhotoFormat, PhotoResolution, ViewOrientation, config_path, digits_of, load_config,
+    overlays_for, range_of, save_config, step_of,
 };
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
@@ -236,6 +239,14 @@ pub enum Input {
     SetCrosshairColor(u32),
     /// Preferences "Gravar sobreposições na foto" switch.
     SetBurnOverlays(bool),
+    /// An image-adjustment slider moved (§6.11); coalesced into
+    /// `ApplyAdjust` so a drag never floods the pipeline.
+    SetAdjust(AdjustKind, f64),
+    /// Debounced apply of the current adjustments to the pipeline and
+    /// the config file.
+    ApplyAdjust,
+    /// "Restaurar padrões" — all five adjustments back to neutral.
+    ResetAdjust,
 }
 
 /// Root component of the application.
@@ -313,6 +324,21 @@ pub struct AppModel {
     /// Split view that hosts the Bancada side panel (§6.9).
     split_view: adw::OverlaySplitView,
     bench_sidebar: adw::ToolbarView,
+    /// Current software image adjustments (§6.11) — what the sliders
+    /// show and the pipeline applies.
+    adjust: ImageAdjust,
+    /// Config key of the active source's adjustments (`"VID:PID"`,
+    /// `"test"`, `"file"`); `None` while no pipeline runs.
+    adjust_key: Option<String>,
+    /// Coalescing flag for slider drags: one pipeline apply per 80 ms.
+    adjust_pending: Rc<Cell<bool>>,
+    /// Every slider showing an adjustment — the Bancada panel rows plus
+    /// the Explorar popover twins — kept for value sync.
+    adjust_sliders: Vec<(AdjustKind, gtk::Scale)>,
+    /// Containers disabled while no source streams (the Bancada group
+    /// and the popover content): adjustments are meaningless without a
+    /// device to persist them under.
+    adjust_controls: Vec<gtk::Widget>,
 }
 
 #[relm4::component(pub)]
@@ -482,6 +508,17 @@ impl SimpleComponent for AppModel {
                                                     sender.input(Input::SetCrosshairColor(row.selected()));
                                                 },
                                             },
+                                        },
+
+                                        // The five sliders and the
+                                        // "Restaurar padrões" row are
+                                        // appended imperatively in
+                                        // `build_adjust_ui` — they share
+                                        // one factory with the Explorar
+                                        // popover (§6.11).
+                                        #[name = "adjust_group"]
+                                        add = &adw::PreferencesGroup {
+                                            set_title: strings::ADJUST_GROUP_TITLE,
                                         },
                                     },
                                 },
@@ -681,6 +718,41 @@ impl SimpleComponent for AppModel {
                                 #[watch]
                                 set_active: model.frozen,
                             },
+                            // Explorar-only: a small popover with just
+                            // brightness and contrast keeps the mode
+                            // clean (§6.11); Bancada uses the side panel.
+                            gtk::Separator {
+                                set_orientation: gtk::Orientation::Vertical,
+                                #[watch]
+                                set_visible: model.mode == AppMode::Explore,
+                            },
+                            #[name = "adjust_button"]
+                            gtk::MenuButton {
+                                set_icon_name: "display-brightness-symbolic",
+                                set_tooltip_text: Some(strings::ADJUST_POPOVER_TOOLTIP),
+                                set_has_frame: false,
+                                set_focusable: false,
+                                #[watch]
+                                set_visible: model.mode == AppMode::Explore,
+
+                                // The popover is attached at template
+                                // build — a post-init `set_popover`
+                                // proved fragile (it opened empty once
+                                // after a hotplug). Rows are appended
+                                // imperatively in `build_adjust_ui`.
+                                #[wrap(Some)]
+                                set_popover = &gtk::Popover {
+                                    #[name = "adjust_pop_box"]
+                                    #[wrap(Some)]
+                                    set_child = &gtk::Box {
+                                        set_orientation: gtk::Orientation::Vertical,
+                                        set_spacing: 6,
+                                        set_margin_top: 6,
+                                        set_margin_bottom: 6,
+                                        set_width_request: 280,
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -724,9 +796,14 @@ impl SimpleComponent for AppModel {
             }
         });
 
+        // The gallery launches before `view_output!` builds the
+        // viewport, so it receives a cell the app fills afterwards —
+        // its context popover returns keyboard focus to it (§7).
+        let gallery_focus: crate::focus::Slot = std::rc::Rc::new(std::cell::RefCell::new(None));
         let gallery = GalleryModel::builder()
             .launch(GalleryInit {
                 window: root.clone(),
+                focus_slot: gallery_focus.clone(),
             })
             .forward(sender.input_sender(), |out| match out {
                 GalleryOutput::Toast(text) => Input::GalleryToast(text),
@@ -783,11 +860,23 @@ impl SimpleComponent for AppModel {
             mode_bench_btn: gtk::ToggleButton::new(),
             split_view: adw::OverlaySplitView::new(),
             bench_sidebar: adw::ToolbarView::new(),
+            adjust: ImageAdjust::default(),
+            adjust_key: None,
+            adjust_pending: Rc::new(Cell::new(false)),
+            adjust_sliders: Vec::new(),
+            adjust_controls: Vec::new(),
         };
         model.sync_menu();
 
         let widgets = view_output!();
         model.grab_widgets(&widgets);
+        // The gallery popover joins the shared focus-return contract
+        // now that the real viewport exists (§7).
+        *gallery_focus.borrow_mut() = Some(widgets.viewport.clone().upcast());
+        // The slider rows (Bancada group + Explorar popover) are built
+        // imperatively — they share one factory (§6.11).
+        model.build_adjust_ui(&widgets, &sender);
+        model.maybe_apply_stored_adjust();
         model.nav_view = widgets.nav_view.clone();
         model.nav_view.connect_popped({
             let sender = sender.clone();
@@ -1121,6 +1210,17 @@ impl SimpleComponent for AppModel {
                     self.persist_config();
                 }
             }
+            Input::SetAdjust(kind, value) => {
+                self.adjust.set(kind, value);
+                self.sync_adjust_sliders();
+                self.schedule_adjust_apply(&sender);
+            }
+            Input::ApplyAdjust => self.apply_adjust(),
+            Input::ResetAdjust => {
+                self.adjust = ImageAdjust::default();
+                self.sync_adjust_sliders();
+                self.apply_adjust();
+            }
         }
     }
 }
@@ -1160,6 +1260,7 @@ impl AppModel {
             CameraState::Streaming => self.video_page.upcast_ref(),
         };
         self.content_stack.set_visible_child(page);
+        self.maybe_apply_stored_adjust();
         if self.state != CameraState::Streaming {
             self.viewport.reset();
             self.set_frozen(false);
@@ -1696,58 +1797,197 @@ impl AppModel {
         });
     }
 
-    /// Keeps single-key accelerators alive by returning keyboard focus
-    /// to the viewport whenever it escaped into an editable widget —
-    /// while a SpinButton/entry holds focus, GTK routes bare letters
-    /// into it and `G`, `C`, `M`, `Space`… silently stop working.
-    fn install_focus_return(&self) {
-        fn is_editing(w: &gtk::Widget) -> bool {
-            w.is::<gtk::Editable>() || w.is::<gtk::TextView>()
+    /// Label of one adjustment slider (`strings::ADJUST_NAMES` follows
+    /// `ImageAdjust::KINDS` order).
+    fn adjust_label(kind: AdjustKind) -> &'static str {
+        let index = ImageAdjust::KINDS
+            .iter()
+            .position(|k| *k == kind)
+            .unwrap_or(0);
+        strings::ADJUST_NAMES[index]
+    }
+
+    /// One label + `gtk::Scale` row wired to `Input::SetAdjust`. The
+    /// returned scale is stored for value sync — Bancada rows and the
+    /// Explorar popover twins share the same model value (§6.11).
+    fn adjust_row(kind: AdjustKind, sink: &Rc<dyn Fn(Input)>) -> (gtk::Widget, gtk::Scale) {
+        let (min, max) = range_of(kind);
+        let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step_of(kind));
+        scale.set_value(ImageAdjust::default().get(kind));
+        scale.set_draw_value(true);
+        scale.set_value_pos(gtk::PositionType::Right);
+        scale.set_digits(digits_of(kind));
+        if kind == AdjustKind::Sharpen {
+            scale.set_format_value_func(|_, v| format!("{v:.0}%"));
         }
-        // Enter inside an editable commits (bubble phase runs after the
-        // widget's own handling) and returns focus to the viewport.
-        let key = gtk::EventControllerKey::new();
-        key.connect_key_pressed({
+        scale.set_hexpand(true);
+        scale.connect_value_changed({
+            let sink = sink.clone();
+            move |scale| sink(Input::SetAdjust(kind, scale.value()))
+        });
+        let label = gtk::Label::builder()
+            .label(Self::adjust_label(kind))
+            .xalign(0.0)
+            .build();
+        let row = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(12)
+            .margin_top(9)
+            .margin_bottom(9)
+            .margin_start(12)
+            .margin_end(12)
+            .build();
+        row.append(&label);
+        row.append(&scale);
+        (row.upcast(), scale)
+    }
+
+    /// Fills the Bancada "Imagem" group (five sliders + "Restaurar
+    /// padrões") and builds the Explorar popover (brightness and
+    /// contrast only — that mode stays visually clean, §6.11). Runs
+    /// once in `init`, after `grab_widgets`.
+    fn build_adjust_ui(
+        &mut self,
+        widgets: &<Self as SimpleComponent>::Widgets,
+        sender: &ComponentSender<Self>,
+    ) {
+        let sink: Rc<dyn Fn(Input)> = {
+            let sender = sender.clone();
+            Rc::new(move |input| sender.input(input))
+        };
+        for kind in ImageAdjust::KINDS {
+            let (row, scale) = Self::adjust_row(kind, &sink);
+            widgets.adjust_group.add(&row);
+            self.adjust_sliders.push((kind, scale));
+        }
+        let reset = adw::ActionRow::builder()
+            .title(strings::ADJUST_RESET_LABEL)
+            .activatable(true)
+            .build();
+        reset.add_suffix(&gtk::Image::from_icon_name("edit-undo-symbolic"));
+        reset.connect_activated({
+            let sender = sender.clone();
+            move |_| sender.input(Input::ResetAdjust)
+        });
+        widgets.adjust_group.add(&reset);
+        self.adjust_controls
+            .push(widgets.adjust_group.clone().upcast());
+
+        // The popover and its box are declared in view! — attach
+        // happens at template build — so only the rows are
+        // appended here (§6.11: Brilho + Contraste only).
+        Self::build_popover_rows(&widgets.adjust_pop_box, &sink, &mut self.adjust_sliders);
+        if let Some(popover) = widgets.adjust_button.popover() {
+            crate::focus::watch_popover(&popover, &self.viewport);
+        }
+        self.adjust_controls
+            .push(widgets.adjust_pop_box.clone().upcast());
+    }
+
+    /// Exactly the two Explorar controls (§6.11): Brilho and
+    /// Contraste, each one a twin of its Bancada row — same
+    /// `Input::SetAdjust` binding, same `adjust_sliders` entry.
+    const EXPLORE_ADJUST_KINDS: [AdjustKind; 2] = [AdjustKind::Brightness, AdjustKind::Contrast];
+
+    fn build_popover_rows(
+        pop_box: &gtk::Box,
+        sink: &Rc<dyn Fn(Input)>,
+        scales: &mut Vec<(AdjustKind, gtk::Scale)>,
+    ) {
+        for kind in Self::EXPLORE_ADJUST_KINDS {
+            let (row, scale) = Self::adjust_row(kind, sink);
+            pop_box.append(&row);
+            scales.push((kind, scale));
+        }
+    }
+
+    /// Re-applies the stored adjustments whenever the active source
+    /// changes: app start, camera switch and hotplug reconnect all
+    /// re-key the running pipeline (`None` disables the controls —
+    /// nothing to persist under while no source streams, §6.12).
+    fn maybe_apply_stored_adjust(&mut self) {
+        let key = self.camera.adjust_key();
+        if key == self.adjust_key {
+            return;
+        }
+        if let Some(key) = &key {
+            self.adjust = self.config.adjust_for(key);
+            self.camera.set_adjust(self.adjust);
+        } else {
+            self.adjust = ImageAdjust::default();
+        }
+        self.adjust_key = key;
+        self.sync_adjust_sliders();
+        let active = self.adjust_key.is_some();
+        for widget in &self.adjust_controls {
+            widget.set_sensitive(active);
+        }
+    }
+
+    /// Every slider mirrors `self.adjust` — covers the Bancada/Explorar
+    /// twins, "Restaurar padrões" and stored-value re-application.
+    /// (`set_value` on the twin re-emits one `SetAdjust` that converges
+    /// on the same value.)
+    fn sync_scales(adjust: &ImageAdjust, scales: &[(AdjustKind, gtk::Scale)]) {
+        for (kind, scale) in scales {
+            let value = adjust.get(*kind);
+            if (scale.value() - value).abs() > f64::EPSILON {
+                scale.set_value(value);
+            }
+        }
+    }
+
+    fn sync_adjust_sliders(&self) {
+        Self::sync_scales(&self.adjust, &self.adjust_sliders);
+    }
+
+    /// Slider drags emit `value-changed` per pixel; the actual
+    /// GStreamer property write is coalesced to one per 80 ms so a drag
+    /// never floods the pipeline (§6.11).
+    fn schedule_adjust_apply(&self, sender: &ComponentSender<Self>) {
+        if self.adjust_pending.replace(true) {
+            return;
+        }
+        let pending = self.adjust_pending.clone();
+        let sender = sender.clone();
+        glib::timeout_add_local_once(Duration::from_millis(80), move || {
+            pending.set(false);
+            sender.input(Input::ApplyAdjust);
+        });
+    }
+
+    /// Pushes the current adjustments to the pipeline — live property
+    /// writes, no restart — and persists them under the active
+    /// source's key (§6.12).
+    fn apply_adjust(&mut self) {
+        self.camera.set_adjust(self.adjust);
+        if let Some(key) = self.adjust_key.clone() {
+            self.config.set_adjust_for(&key, self.adjust);
+            self.persist_config();
+        }
+    }
+
+    /// Wires the shared focus-return helper (crate::focus): the window
+    /// watchers, and a `closed` hook on every dialog/popover the app
+    /// owns so single-key accelerators never stay dead (CONVENTIONS §7).
+    fn install_focus_return(&self) {
+        crate::focus::install(
+            &self.window,
+            &self.viewport,
+            self.bench_sidebar.upcast_ref(),
+        );
+        // The camera-menu popover is created lazily by the MenuButton.
+        if let Some(popover) = self.menu_button.popover() {
+            crate::focus::watch_popover(&popover, &self.viewport);
+        } else {
             let viewport = self.viewport.clone();
-            let window = self.window.clone();
-            move |_, key, _, _| {
-                if key == gtk::gdk::Key::Return || key == gtk::gdk::Key::KP_Enter {
-                    let editing = GtkWindowExt::focus(&window).is_some_and(|f| is_editing(&f));
-                    if editing {
-                        viewport.grab_focus();
+            self.menu_button
+                .connect_notify_local(Some("popover"), move |button, _| {
+                    if let Some(popover) = button.popover() {
+                        crate::focus::watch_popover(&popover, &viewport);
                     }
-                }
-                glib::Propagation::Proceed
-            }
-        });
-        self.window.add_controller(key.clone());
-        // Focus inside an editable when the window reactivates (a
-        // dialog or the gallery closed) returns to the viewport.
-        self.window.connect_notify_local(Some("is-active"), {
-            let viewport = self.viewport.clone();
-            move |win, _| {
-                if !win.is_active() {
-                    return;
-                }
-                let stuck = GtkWindowExt::focus(win).is_some_and(|f| is_editing(&f));
-                if stuck {
-                    viewport.grab_focus();
-                }
-            }
-        });
-        // Pointer leaving the Bancada panel ends an edit session.
-        let motion = gtk::EventControllerMotion::new();
-        motion.connect_leave({
-            let viewport = self.viewport.clone();
-            let window = self.window.clone();
-            move |_| {
-                let stuck = GtkWindowExt::focus(&window).is_some_and(|f| is_editing(&f));
-                if stuck {
-                    viewport.grab_focus();
-                }
-            }
-        });
-        self.bench_sidebar.add_controller(motion);
+                });
+        }
     }
 
     /// Builds and presents the preferences dialog (Fotos page).
@@ -1828,12 +2068,7 @@ impl AppModel {
 
         page.add(&group);
         dialog.add(&page);
-        dialog.connect_closed({
-            let viewport = self.viewport.clone();
-            move |_| {
-                viewport.grab_focus();
-            }
-        });
+        crate::focus::watch_dialog(dialog.upcast_ref::<adw::Dialog>(), &self.viewport);
         dialog.present(Some(&self.window));
     }
 }
@@ -1857,7 +2092,7 @@ fn dump_widget_tree(widget: &(impl IsA<gtk::Widget> + gtk::prelude::BuildableExt
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::path::PathBuf;
 
     use super::*;
@@ -1923,5 +2158,93 @@ mod tests {
         cam.is_microscope = true;
         let (label, _) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam));
         assert_eq!(label, strings::MICROSCOPE_LABEL);
+    }
+
+    /// The Explorar popover contract (§6.11, round-2 regression):
+    /// it must hold exactly the Brilho and Contraste rows, each
+    /// carrying a label + one Scale, and every twin must share
+    /// the same `ImageAdjust` — same `Input::SetAdjust` emitted
+    /// on drag, same value after `sync_scales` — so the two UIs
+    /// can never diverge.
+    ///
+    /// NOT a `#[test]`: GTK can only init on one thread, so this
+    /// runs inside the single `crate::tests::gtk_ui_contracts`.
+    pub(crate) fn check() {
+        let emitted = Rc::new(std::cell::RefCell::new(Vec::<(AdjustKind, f64)>::new()));
+        let sink: Rc<dyn Fn(Input)> = {
+            let emitted = emitted.clone();
+            Rc::new(move |input| {
+                if let Input::SetAdjust(kind, value) = input {
+                    emitted.borrow_mut().push((kind, value));
+                }
+            })
+        };
+
+        // The same factory the app uses fills the declared box.
+        let pop_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let mut pop_scales = Vec::new();
+        AppModel::build_popover_rows(&pop_box, &sink, &mut pop_scales);
+
+        // Exactly two rows, in EXPLORE_ADJUST_KINDS order.
+        assert_eq!(AppModel::EXPLORE_ADJUST_KINDS.len(), 2);
+        assert_eq!(pop_scales.len(), 2);
+        assert_eq!(pop_scales[0].0, AdjustKind::Brightness);
+        assert_eq!(pop_scales[1].0, AdjustKind::Contrast);
+        let mut rows = Vec::new();
+        let mut child = pop_box.first_child();
+        while let Some(c) = child {
+            child = c.next_sibling();
+            rows.push(c);
+        }
+        assert_eq!(rows.len(), 2);
+        for ((kind, scale), row) in pop_scales.iter().zip(&rows) {
+            let Some(row) = row.downcast_ref::<gtk::Box>() else {
+                panic!("row is a Box")
+            };
+            let label = row
+                .first_child()
+                .and_then(|w| w.downcast::<gtk::Label>().ok());
+            let Some(label) = label else {
+                panic!("row starts with a Label")
+            };
+            assert_eq!(label.label(), AppModel::adjust_label(*kind));
+            let twin = label
+                .next_sibling()
+                .and_then(|w| w.downcast::<gtk::Scale>().ok());
+            let Some(twin) = twin else {
+                panic!("row's second child is a Scale")
+            };
+            assert_eq!(&twin, scale);
+            // The row carries exactly the label and the scale.
+            assert_eq!(row.last_child(), Some(twin.upcast()));
+        }
+
+        // Shared state — model -> twins: a Bancada twin built by the
+        // same factory and the popover twin must move together.
+        let (_, bench_scale) = AppModel::adjust_row(AdjustKind::Brightness, &sink);
+        let mut all_scales = vec![(AdjustKind::Brightness, bench_scale.clone())];
+        all_scales.extend(pop_scales.iter().cloned());
+        let mut adjust = ImageAdjust::default();
+        adjust.set(AdjustKind::Brightness, 0.42);
+        AppModel::sync_scales(&adjust, &all_scales);
+        assert!((bench_scale.value() - 0.42).abs() < 1e-9);
+        assert!((pop_scales[0].1.value() - 0.42).abs() < 1e-9);
+
+        // Shared state — twins -> model: dragging either row emits
+        // the same SetAdjust input (one logical value, §6.11).
+        pop_scales[1].1.set_value(1.6);
+        assert!(
+            emitted
+                .borrow()
+                .iter()
+                .any(|(k, v)| *k == AdjustKind::Contrast && (*v - 1.6).abs() < 1e-9)
+        );
+        bench_scale.set_value(-0.5);
+        assert!(
+            emitted
+                .borrow()
+                .iter()
+                .any(|(k, v)| *k == AdjustKind::Brightness && (*v + 0.5).abs() < 1e-9)
+        );
     }
 }

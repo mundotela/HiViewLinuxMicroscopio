@@ -156,16 +156,18 @@ impl Default for Viewport {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The viewport is the keyboard-focus anchor of the main window —
     /// if `focusable` regresses, clicking the video stops restoring
     /// single-key accelerators and the M6 focus bug comes back.
-    #[test]
-    fn viewport_is_focusable() {
+    ///
+    /// NOT a `#[test]`: GTK can only init on one thread, so every GTK
+    /// check runs inside the single `crate::tests::gtk_ui_contracts`
+    /// test.
+    pub(crate) fn check() {
         if gtk::init().is_err() {
-            // No display in the test environment (CI/headless).
             return;
         }
         let viewport = Viewport::new();

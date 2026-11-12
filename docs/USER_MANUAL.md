@@ -44,6 +44,10 @@ O HiView é honesto sobre isso: quando você escolhe salvar em resolução maior
 
 ## 3. Instalação
 
+**Requisito de processador:** x86-64 com SSE4.2 (Intel a partir de
+~2009, AMD a partir de ~2011). Se o HiView não abrir em um computador
+muito antigo, esse é o motivo mais provável.
+
 ### 3.1 Programa principal
 
 ```bash
@@ -96,10 +100,12 @@ O HiView tem dois modos, escolhidos no seletor do topo ou pela tecla `M`:
 
 - **Explorar** é o modo simples: a imagem ocupa tudo e não há painel
   lateral nem sobreposições. É o modo padrão para uso casual.
-- **Bancada** é o modo de inspeção: abre um **painel lateral** com as
-  ferramentas de grade e mira (medição e ajustes de imagem chegam em
-  versões futuras). As sobreposições ligadas na Bancada voltam a
-  aparecer quando você retorna ao modo — mas só aparecem na Bancada.
+- **Bancada** é o modo de inspeção: abre um **painel lateral** com
+  grade, mira e ajustes de imagem (medição chega em versão futura). As
+  sobreposições ligadas na Bancada voltam a aparecer quando você
+  retorna ao modo — mas só aparecem na Bancada.
+- No **Explorar**, os ajustes de brilho e contraste ficam no botão ☀
+  da barra flutuante — os demais só aparecem na Bancada.
 
 No modo Explorar, as teclas `G` e `C` mostram um aviso rápido de que
 essas ferramentas ficam no modo Bancada.
@@ -230,11 +236,20 @@ gravam sobreposições.
 
 ### 11.2 Ajustes de imagem
 
-> ⚠️ Planejado para uma versão futura — ainda não disponível.
+Brilho, contraste, saturação, gama e nitidez, em cinco deslizadores no
+painel lateral. O efeito muda na hora, sem interromper o vídeo, e os
+ajustes entram também nas **fotos** e nos **vídeos** — tudo sai igual à
+tela.
 
-Brilho, contraste, saturação, gama e nitidez. Eles são aplicados pelo HiView na imagem, então aparecem também nas fotos e nos vídeos. **Restaurar padrões** desfaz tudo. Os ajustes ficam salvos para a próxima vez.
+- **Restaurar padrões** desfaz tudo e volta a imagem ao normal.
+- Os ajustes ficam salvos **por aparelho** e voltam ao reconectar ou
+  reabrir o app.
+- Os ajustes são feitos **por software**, dentro do próprio app, e
+  não dependem de nenhum componente extra do sistema.
 
-> O brilho dos **LEDs** do microscópio só muda pela roda do cabo. O ajuste de brilho do app clareia ou escurece a imagem, mas não muda a luz. Para objetos que refletem muito, baixe primeiro os LEDs.
+> O brilho dos **LEDs** do microscópio só muda pela roda do cabo. O
+> ajuste de brilho do app clareia ou escurece a imagem, mas não muda a
+> luz. Para objetos que refletem muito, baixe primeiro os LEDs.
 
 ### 11.3 Medição
 

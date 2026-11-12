@@ -86,6 +86,10 @@ pub enum Output {
 pub struct GalleryInit {
     /// Application window, parent of dialogs and file launchers.
     pub window: adw::ApplicationWindow,
+    /// Lazily-filled keyboard focus target — the app fills it with the
+    /// viewport once the widgets exist (the gallery launches first, so
+    /// it cannot receive the widget directly; §7 focus return).
+    pub focus_slot: crate::focus::Slot,
 }
 
 /// Live gallery pages — logged on every open as proof that the app
@@ -380,6 +384,7 @@ impl SimpleComponent for GalleryModel {
         });
         menu_button(strings::GALLERY_TRASH, || Input::ContextTrash);
         popover.set_child(Some(&menu));
+        crate::focus::watch_popover_slot(&popover, init.focus_slot.clone());
         model.popover = popover;
 
         ComponentParts { model, widgets }
