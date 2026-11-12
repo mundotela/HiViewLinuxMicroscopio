@@ -243,6 +243,19 @@ pub const CROSS_COLOR_LABEL: &str = "Cor";
 /// Color preset names — same order as `OverlayColor::PRESETS`.
 pub const COLOR_NAMES: [&str; 5] = ["Verde", "Amarelo", "Ciano", "Branco", "Vermelho"];
 
+/// Side panel group title: software image adjustments (§6.11).
+pub const ADJUST_GROUP_TITLE: &str = "Imagem";
+
+/// Side panel / Explorar popover slider labels — same order as
+/// `ImageAdjust::KINDS`.
+pub const ADJUST_NAMES: [&str; 5] = ["Brilho", "Contraste", "Saturação", "Gama", "Nitidez"];
+
+/// Side panel row: reset the five image adjustments to neutral.
+pub const ADJUST_RESET_LABEL: &str = "Restaurar padrões";
+
+/// Explorar toolbar button: opens the brightness/contrast popover.
+pub const ADJUST_POPOVER_TOOLTIP: &str = "Ajustes de imagem";
+
 /// Crosshair style names — same order as `CrosshairStyle` variants.
 pub const STYLE_NAMES: [&str; 3] = ["Cruz", "Cruz com círculo", "Cruz com escala"];
 

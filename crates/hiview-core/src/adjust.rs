@@ -159,9 +159,10 @@ pub fn step_of(kind: AdjustKind) -> f64 {
     }
 }
 
-/// Decimal digits shown by the slider's value label.
+/// Decimal digits shown by the slider's value label (`gtk::Scale`
+/// takes `i32`).
 #[must_use]
-pub fn digits_of(kind: AdjustKind) -> u32 {
+pub fn digits_of(kind: AdjustKind) -> i32 {
     match kind {
         AdjustKind::Sharpen => 0,
         _ => 2,

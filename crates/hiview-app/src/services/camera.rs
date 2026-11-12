@@ -10,7 +10,7 @@ use hiview_capture::{
     CameraDescriptor, CameraEvent, CameraState, CapturePipeline, CaptureSource, DeviceWatcher,
     Error, FrameBus,
 };
-use hiview_core::ViewOrientation;
+use hiview_core::{ImageAdjust, ViewOrientation};
 use tracing::{debug, error, info, warn};
 
 use crate::cli::Source;
@@ -45,6 +45,21 @@ fn is_disconnect_error(detail: &str) -> bool {
     detail.contains("poll error") || detail.contains("ENODEV") || detail.contains("ENOENT")
 }
 
+/// The config key a source's adjustments persist under — `"VID:PID"`
+/// for USB devices so the same physical camera keeps its values across
+/// `/dev/videoN` renumbering and replugs (§6.12). Pure logic, unit
+/// tested with fake descriptors.
+fn adjust_key_for(source: &CaptureSource) -> String {
+    match source {
+        CaptureSource::Device(desc) => match (desc.usb_vid, desc.usb_pid) {
+            (Some(vid), Some(pid)) => format!("{vid:04x}:{pid:04x}"),
+            _ => desc.stable_id(),
+        },
+        CaptureSource::Test => "test".into(),
+        CaptureSource::File(_) => "file".into(),
+    }
+}
+
 /// Whether cameras come from hardware discovery or a fixed CLI source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -65,6 +80,9 @@ pub struct CameraService {
     /// Current mirror/rotation, reapplied every time a pipeline starts
     /// (docs/ARCHITECTURE.md §6.4).
     orientation: ViewOrientation,
+    /// Current software image adjustments, reapplied every time a
+    /// pipeline starts (docs/ARCHITECTURE.md §6.11).
+    adjust: ImageAdjust,
     on_event: Arc<dyn Fn(CameraEvent) + Send + Sync>,
     _watcher: Option<DeviceWatcher>,
 }
@@ -88,6 +106,7 @@ impl CameraService {
             pipeline: None,
             frame_bus,
             orientation: ViewOrientation::default(),
+            adjust: ImageAdjust::default(),
             on_event,
             _watcher: None,
         };
@@ -157,6 +176,26 @@ impl CameraService {
         }
     }
 
+    /// Applies the software image adjustments live on the running
+    /// pipeline and keeps them across camera re-selection and hotplug
+    /// restarts (docs/ARCHITECTURE.md §6.11).
+    pub fn set_adjust(&mut self, adjust: ImageAdjust) {
+        self.adjust = adjust;
+        if let Some(pipeline) = &self.pipeline {
+            pipeline.set_adjust(&adjust);
+        }
+    }
+
+    /// Config key identifying the active source for per-device
+    /// adjustment persistence (docs/ARCHITECTURE.md §6.12): `"VID:PID"`
+    /// for USB cameras, the stable id when a device has no USB
+    /// identity, `"test"`/`"file"` for the fixed CLI sources. `None`
+    /// while no pipeline is running.
+    #[must_use]
+    pub fn adjust_key(&self) -> Option<String> {
+        self.pipeline.as_ref().map(|p| adjust_key_for(p.source()))
+    }
+
     /// Applies a camera event arriving from the monitor or bus threads.
     pub fn on_event(&mut self, event: CameraEvent) {
         debug!("camera event: {event:?}");
@@ -215,6 +254,7 @@ impl CameraService {
         match CapturePipeline::start(source, self.frame_bus.clone(), move |e| on_event(e)) {
             Ok(pipeline) => {
                 pipeline.set_orientation(self.orientation.method());
+                pipeline.set_adjust(&self.adjust);
                 self.pipeline = Some(pipeline);
                 self.state = CameraState::Starting;
             }
@@ -321,6 +361,32 @@ mod tests {
             .unwrap_or_else(|| panic!("camera B missing after swap"));
         assert_eq!(picked.dev_node, PathBuf::from("/dev/video4"));
         assert_eq!(picked.usb_path.as_deref(), Some("pci-usb-0:6"));
+    }
+
+    /// §6.12 persistence: a replugged device gets a new `/dev/videoN`
+    /// node but the same VID:PID — the adjustment key must not change,
+    /// so the stored values find the device again.
+    #[test]
+    fn adjust_key_survives_node_renumbering() {
+        let key = |node: &str| adjust_key_for(&CaptureSource::Device(fake_camera(node, "usb-0:5")));
+        assert_eq!(key("/dev/video0"), "1111:2222");
+        assert_eq!(key("/dev/video4"), "1111:2222");
+
+        // A device without USB identity falls back to the stable id.
+        let mut no_usb = fake_camera("/dev/video3", "pci-usb-0:7");
+        no_usb.usb_vid = None;
+        no_usb.usb_pid = None;
+        assert_eq!(
+            adjust_key_for(&CaptureSource::Device(no_usb)),
+            "pci-usb-0:7"
+        );
+
+        // The fixed CLI sources persist under their own keys.
+        assert_eq!(adjust_key_for(&CaptureSource::Test), "test");
+        assert_eq!(
+            adjust_key_for(&CaptureSource::File(PathBuf::from("/tmp/clip.mp4"))),
+            "file"
+        );
     }
 
     #[test]
