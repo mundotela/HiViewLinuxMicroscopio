@@ -177,6 +177,35 @@ mod tests {
         assert_eq!(out.get_pixel(49, 500).0[0], 0);
     }
 
+    /// A committed ruler line burns onto the photo at the output
+    /// resolution — image x=160→x=480 lands at output x=400→x=1200 on
+    /// the 1600×1200 interpolation (§6.9).
+    #[test]
+    fn burn_in_scales_measurements_to_output_resolution() {
+        let mut state = OverlayState::default();
+        state.measure.px_per_mm = None;
+        state.measure.items.push(hiview_core::Measurement {
+            id: 1,
+            tool: hiview_core::MeasureTool::Ruler,
+            shape: hiview_core::MeasureShape::Line {
+                a: Point::new(160.0, 240.0),
+                b: Point::new(480.0, 240.0),
+            },
+        });
+        let source = Size::new(640.0, 480.0);
+
+        // Measurement lines are drawn in cyan — blue+green high, red low.
+        let native = burn_in(black_image(640, 480), source, &state);
+        let mid = native.get_pixel(320, 240).0;
+        assert!(mid[1] > 200 && mid[2] > 200 && mid[0] < 120, "got {mid:?}");
+
+        let upscaled = burn_in(black_image(1600, 1200), source, &state);
+        let mid = upscaled.get_pixel(800, 600).0;
+        assert!(mid[1] > 200 && mid[2] > 200 && mid[0] < 120, "got {mid:?}");
+        // Away from the line the photo stays untouched.
+        assert_eq!(upscaled.get_pixel(800, 620).0, BLACK);
+    }
+
     /// Ticks style still centers the cross and adds tick marks.
     #[test]
     fn burn_in_renders_scale_ticks() {

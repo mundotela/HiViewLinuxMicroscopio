@@ -14,9 +14,10 @@ use hiview_capture::{
     check_disk_space,
 };
 use hiview_core::{
-    AdjustKind, AppConfig, AppMode, CrosshairStyle, GridSpacing, ImageAdjust, OverlayColor,
-    PhotoFormat, PhotoResolution, ViewOrientation, config_path, digits_of, load_config,
-    overlays_for, range_of, save_config, step_of,
+    AdjustKind, AppConfig, AppMode, CalibrationProfile, CrosshairStyle, GridSpacing, ImageAdjust,
+    MeasureCommit, MeasureGesture, MeasureSet, MeasureTool, Orientation, OverlayColor,
+    OverlayState, PhotoFormat, PhotoResolution, Point, ViewOrientation, config_path, digits_of,
+    load_config, overlays_for, range_of, save_config, step_of,
 };
 use relm4::actions::{AccelsPlus, RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
@@ -30,6 +31,7 @@ use crate::cli::Args;
 use crate::components::gallery::{
     GalleryInit, GalleryModel, Input as GalleryInput, Output as GalleryOutput,
 };
+use crate::measure_ui::MeasurePanel;
 use crate::services::camera::CameraService;
 use crate::services::photo::{PhotoOutcome, PhotoService};
 use crate::services::recorder::{ActiveRecording, StopReason, filesystem_free_bytes};
@@ -140,6 +142,9 @@ relm4::new_stateless_action!(GalleryAction, WindowActionGroup, "gallery");
 relm4::new_stateless_action!(ToggleModeAction, WindowActionGroup, "toggle-mode");
 relm4::new_stateless_action!(ToggleGridAction, WindowActionGroup, "toggle-grid");
 relm4::new_stateless_action!(ToggleCrossAction, WindowActionGroup, "toggle-crosshair");
+relm4::new_stateless_action!(MeasureRulerAction, WindowActionGroup, "measure-ruler");
+relm4::new_stateless_action!(MeasureAngleAction, WindowActionGroup, "measure-angle");
+relm4::new_stateless_action!(MeasureCircleAction, WindowActionGroup, "measure-circle");
 
 /// Which capture the floating shutter button performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,6 +252,31 @@ pub enum Input {
     ApplyAdjust,
     /// "Restaurar padrões" — all five adjustments back to neutral.
     ResetAdjust,
+    /// A measurement gesture from the viewport (image coords, §6.9).
+    Measure(MeasureGesture),
+    /// `L`/`A`/`O`: arm a tool (same key again disarms it).
+    ArmMeasure(MeasureTool),
+    /// The side-panel tool combo changed (index into `TOOL_NAMES`).
+    ArmMeasureIndex(u32),
+    /// Per-item delete in the measurement list.
+    DeleteMeasurement(u64),
+    /// "Limpar medições" — drop every committed measurement.
+    ClearMeasurements,
+    /// "Nova calibração…" — arms the reference-line tool.
+    StartCalibration,
+    /// The wizard committed a profile: name + real millimetres for
+    /// the line stored in `pending_calibration`.
+    CommitCalibration { name: String, mm: f64 },
+    /// Active-profile combo changed (0 = no calibration).
+    SelectCalibration(u32),
+    /// "Renomear…" clicked — opens the rename dialog.
+    RequestRenameCalibration,
+    /// The rename dialog committed a new name.
+    CalibrationRenamed(String),
+    /// "Excluir…" clicked — opens the destructive confirmation.
+    RequestDeleteCalibration,
+    /// Profile deletion confirmed.
+    DeleteCalibration,
 }
 
 /// Root component of the application.
@@ -339,6 +369,20 @@ pub struct AppModel {
     /// and the popover content): adjustments are meaningless without a
     /// device to persist them under.
     adjust_controls: Vec<gtk::Widget>,
+    /// Committed measurements plus the armed tool's session (§6.9).
+    /// Runtime state — never persisted.
+    measure: MeasureSet,
+    /// The reference line awaiting the calibration wizard's answer.
+    pending_calibration: Option<(Point, Point)>,
+    /// The Medição panel widgets, built in `init` (list + dialogs are
+    /// imperative — see `measure_ui.rs`).
+    measure_panel: Option<MeasurePanel>,
+    /// The preferences page hosting the sidebar groups — the Medição
+    /// group is added imperatively like the adjust rows.
+    bench_prefs: adw::PreferencesPage,
+    /// Grid spacing row: its unit (px/mm), digits and range follow the
+    /// active calibration, so it is reconfigured imperatively.
+    grid_spacing_row: adw::SpinRow,
 }
 
 #[relm4::component(pub)]
@@ -406,6 +450,15 @@ impl SimpleComponent for AppModel {
                                 },
                             },
 
+                            // Permanent while a calibration is active
+                            // (§6.9): ring/height invalidate the scale.
+                            add_top_bar = &adw::Banner {
+                                set_title: strings::CALIBRATION_BANNER,
+                                #[watch]
+                                set_revealed: model.mode == AppMode::Bench
+                                    && model.config.active_profile().is_some(),
+                            },
+
                             #[name = "split_view"]
                             #[wrap(Some)]
                             set_content = &adw::OverlaySplitView {
@@ -422,6 +475,7 @@ impl SimpleComponent for AppModel {
                                         },
                                     },
 
+                                    #[name = "bench_prefs"]
                                     #[wrap(Some)]
                                     set_content = &adw::PreferencesPage {
                                         add = &adw::PreferencesGroup {
@@ -436,17 +490,18 @@ impl SimpleComponent for AppModel {
                                                 },
                                             },
 
+                                            #[name = "grid_spacing"]
                                             adw::SpinRow {
-                                                set_title: strings::GRID_SPACING_LABEL,
-                                                set_adjustment: Some(&gtk::Adjustment::new(
-                                                    model.config.overlays.grid.spacing.pixels(None),
-                                                    hiview_core::MIN_GRID_SPACING_PX,
-                                                    hiview_core::MAX_GRID_SPACING_PX,
-                                                    5.0, 25.0, 0.0,
-                                                )),
-                                                set_digits: 0,
+                                                // The unit (px/mm),
+                                                // digits and range
+                                                // follow the active
+                                                // calibration —
+                                                // `sync_grid_unit`
+                                                // reconfigures the row.
                                                 #[watch]
-                                                set_value: model.config.overlays.grid.spacing.pixels(None),
+                                                set_title: model.grid_spacing_label(),
+                                                #[watch]
+                                                set_value: model.grid_spacing_display(),
                                                 connect_value_notify[sender] => move |row| {
                                                     sender.input(Input::SetGridSpacing(row.value()));
                                                 },
@@ -865,6 +920,11 @@ impl SimpleComponent for AppModel {
             adjust_pending: Rc::new(Cell::new(false)),
             adjust_sliders: Vec::new(),
             adjust_controls: Vec::new(),
+            measure: MeasureSet::default(),
+            pending_calibration: None,
+            measure_panel: None,
+            bench_prefs: adw::PreferencesPage::new(),
+            grid_spacing_row: adw::SpinRow::with_range(0.0, 1.0, 1.0),
         };
         model.sync_menu();
 
@@ -877,6 +937,18 @@ impl SimpleComponent for AppModel {
         // imperatively — they share one factory (§6.11).
         model.build_adjust_ui(&widgets, &sender);
         model.maybe_apply_stored_adjust();
+        // The Medição group is imperative too (dynamic list, dialogs).
+        let (measure_group, measure_panel) = crate::measure_ui::build(&sender);
+        widgets.bench_prefs.add(&measure_group);
+        model.measure_panel = Some(measure_panel);
+        // Measurement gestures arrive as image coordinates from the
+        // viewport's gesture controllers (§6.9).
+        widgets.viewport.set_measure_handler({
+            let sender = sender.clone();
+            move |g| sender.input(Input::Measure(g))
+        });
+        model.sync_grid_unit();
+        model.sync_measure_ui(&sender);
         model.nav_view = widgets.nav_view.clone();
         model.nav_view.connect_popped({
             let sender = sender.clone();
@@ -933,6 +1005,9 @@ impl SimpleComponent for AppModel {
         view_action!(ToggleModeAction, Input::ToggleMode);
         view_action!(ToggleGridAction, Input::ToggleGrid);
         view_action!(ToggleCrossAction, Input::ToggleCrosshair);
+        view_action!(MeasureRulerAction, Input::ArmMeasure(MeasureTool::Ruler));
+        view_action!(MeasureAngleAction, Input::ArmMeasure(MeasureTool::Angle));
+        view_action!(MeasureCircleAction, Input::ArmMeasure(MeasureTool::Circle));
 
         // The window must finalize a running recording (EOS sequence)
         // before it may close — see Input::CloseRequested.
@@ -984,6 +1059,9 @@ impl SimpleComponent for AppModel {
         app.set_accelerators_for_action::<ToggleModeAction>(&["m", "M"]);
         app.set_accelerators_for_action::<ToggleGridAction>(&["g", "G"]);
         app.set_accelerators_for_action::<ToggleCrossAction>(&["c", "C"]);
+        app.set_accelerators_for_action::<MeasureRulerAction>(&["l", "L"]);
+        app.set_accelerators_for_action::<MeasureAngleAction>(&["a", "A"]);
+        app.set_accelerators_for_action::<MeasureCircleAction>(&["o", "O"]);
 
         ComponentParts { model, widgets }
     }
@@ -1016,22 +1094,26 @@ impl SimpleComponent for AppModel {
             Input::FitView => self.viewport.fit(),
             Input::Zoom100 => self.viewport.zoom_100(),
             Input::MirrorH => {
+                let from = self.orientation.method();
                 self.orientation.toggle_mirror_h();
-                self.apply_orientation();
+                self.on_orientation_changed(from);
             }
             Input::MirrorV => {
+                let from = self.orientation.method();
                 self.orientation.toggle_mirror_v();
-                self.apply_orientation();
+                self.on_orientation_changed(from);
             }
             // Rotation is blocked while recording: a video cannot change
             // resolution mid-file (docs/ARCHITECTURE.md section 6.4).
             Input::RotateCcw if self.recording.is_none() => {
+                let from = self.orientation.method();
                 self.orientation.rotate_ccw();
-                self.apply_orientation();
+                self.on_orientation_changed(from);
             }
             Input::RotateCw if self.recording.is_none() => {
+                let from = self.orientation.method();
                 self.orientation.rotate_cw();
-                self.apply_orientation();
+                self.on_orientation_changed(from);
             }
             Input::RotateCcw | Input::RotateCw => {
                 tracing::debug!("rotate ignored while recording");
@@ -1049,7 +1131,11 @@ impl SimpleComponent for AppModel {
                 }
             }
             Input::Escape => {
-                if self.window.is_fullscreen() {
+                // `Esc` cancels a measurement in progress before it
+                // touches fullscreen (§6.9).
+                if self.measure.cancel() {
+                    self.measure_changed(&sender);
+                } else if self.window.is_fullscreen() {
                     self.window.unfullscreen();
                 }
             }
@@ -1154,13 +1240,22 @@ impl SimpleComponent for AppModel {
                     self.overlays_changed();
                 }
             }
-            Input::SetGridSpacing(px) => {
-                let px = px.clamp(
-                    hiview_core::MIN_GRID_SPACING_PX,
-                    hiview_core::MAX_GRID_SPACING_PX,
-                );
-                if self.config.overlays.grid.spacing != GridSpacing::Pixels(px) {
-                    self.config.overlays.grid.spacing = GridSpacing::Pixels(px);
+            Input::SetGridSpacing(value) => {
+                // The row edits millimetres while a calibration is
+                // active, pixels otherwise (§6.9).
+                let spacing = if self.active_px_per_mm().is_some() {
+                    GridSpacing::Millimeters(value.clamp(
+                        hiview_core::MIN_GRID_SPACING_MM,
+                        hiview_core::MAX_GRID_SPACING_MM,
+                    ))
+                } else {
+                    GridSpacing::Pixels(value.clamp(
+                        hiview_core::MIN_GRID_SPACING_PX,
+                        hiview_core::MAX_GRID_SPACING_PX,
+                    ))
+                };
+                if self.config.overlays.grid.spacing != spacing {
+                    self.config.overlays.grid.spacing = spacing;
                     self.overlays_changed();
                 }
             }
@@ -1221,6 +1316,132 @@ impl SimpleComponent for AppModel {
                 self.sync_adjust_sliders();
                 self.apply_adjust();
             }
+            Input::Measure(gesture) => {
+                match self.measure.gesture(gesture) {
+                    MeasureCommit::CalibrationLine { a, b } => {
+                        self.open_calibration_wizard(a, b, &sender);
+                    }
+                    MeasureCommit::Shape(_) | MeasureCommit::Nothing => {}
+                }
+                // Hover/drag drafts live in the overlay state — every
+                // gesture refreshes the drawing.
+                self.measure_changed(&sender);
+            }
+            Input::ArmMeasure(tool) => {
+                if self.bench_only() {
+                    // Same key again disarms the tool.
+                    let next = (self.measure.armed_tool() != Some(tool)).then_some(tool);
+                    self.arm_measure(next, &sender);
+                }
+            }
+            Input::ArmMeasureIndex(index) => {
+                if self.mode == AppMode::Bench {
+                    self.arm_measure(
+                        match index {
+                            1 => Some(MeasureTool::Ruler),
+                            2 => Some(MeasureTool::Angle),
+                            3 => Some(MeasureTool::Circle),
+                            _ => None,
+                        },
+                        &sender,
+                    );
+                }
+            }
+            Input::DeleteMeasurement(id) => {
+                if self.measure.remove(id) {
+                    self.measure_changed(&sender);
+                }
+            }
+            Input::ClearMeasurements => {
+                if !self.measure.items.is_empty() {
+                    self.measure.clear();
+                    self.measure_changed(&sender);
+                }
+            }
+            Input::StartCalibration => {
+                if self.bench_only() {
+                    if self.state == CameraState::Streaming {
+                        self.arm_measure(Some(MeasureTool::Calibrate), &sender);
+                    } else {
+                        self.show_toast(adw::Toast::new(strings::MEASURE_NO_FRAME));
+                    }
+                }
+            }
+            Input::CommitCalibration { name, mm } => {
+                if let Some((a, b)) = self.pending_calibration.take() {
+                    let old_ppm = self.active_px_per_mm();
+                    if let Some(profile) = CalibrationProfile::from_line(a, b, mm, name.clone()) {
+                        self.config.upsert_profile(profile);
+                        self.calibration_changed(old_ppm, &sender);
+                        tracing::info!("calibration profile created: {name}");
+                    }
+                }
+            }
+            Input::SelectCalibration(index) => {
+                let old_ppm = self.active_px_per_mm();
+                let name = index
+                    .checked_sub(1)
+                    .and_then(|i| self.config.calibration.get(i as usize))
+                    .map(|p| p.name.clone());
+                if self.config.active_calibration != name {
+                    self.config.active_calibration = name;
+                    self.calibration_changed(old_ppm, &sender);
+                }
+            }
+            Input::RequestRenameCalibration => {
+                if let Some(active) = self.config.active_profile() {
+                    let current = active.name.clone();
+                    let others: Vec<String> = self
+                        .config
+                        .calibration
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect();
+                    crate::measure_dialogs::open_rename_dialog(
+                        &self.window,
+                        &self.viewport,
+                        &current,
+                        others,
+                        &sender,
+                    );
+                }
+            }
+            Input::CalibrationRenamed(name) => {
+                let trimmed = name.trim();
+                if let Some(active) = self.config.active_profile()
+                    && !trimmed.is_empty()
+                    && !self
+                        .config
+                        .calibration
+                        .iter()
+                        .any(|p| p.name == trimmed && p.name != active.name)
+                {
+                    let old = active.name.clone();
+                    if let Some(p) = self.config.calibration.iter_mut().find(|p| p.name == old) {
+                        p.name = trimmed.to_string();
+                    }
+                    self.config.active_calibration = Some(trimmed.to_string());
+                    self.persist_config();
+                    self.sync_measure_ui(&sender);
+                }
+            }
+            Input::RequestDeleteCalibration => {
+                if let Some(active) = self.config.active_profile() {
+                    crate::measure_dialogs::confirm_delete_profile(
+                        &self.window,
+                        &active.name.clone(),
+                        &sender,
+                    );
+                }
+            }
+            Input::DeleteCalibration => {
+                let old_ppm = self.active_px_per_mm();
+                if let Some(name) = self.config.active_calibration.clone() {
+                    self.config.remove_profile(&name);
+                    self.calibration_changed(old_ppm, &sender);
+                    tracing::info!("calibration profile deleted: {name}");
+                }
+            }
         }
     }
 }
@@ -1244,6 +1465,8 @@ impl AppModel {
         self.mode_bench_btn = widgets.mode_bench_btn.clone();
         self.split_view = widgets.split_view.clone();
         self.bench_sidebar = widgets.bench_sidebar.clone();
+        self.bench_prefs = widgets.bench_prefs.clone();
+        self.grid_spacing_row = widgets.grid_spacing.clone();
         // Push the persisted overlay/mode state into the viewport — the
         // placeholder overlays stay `None` (hidden) until this runs.
         self.apply_overlays();
@@ -1275,6 +1498,174 @@ impl AppModel {
         if self.state == CameraState::Streaming {
             self.camera.set_orientation(self.orientation);
         }
+    }
+
+    /// The orientation was toggled: stored measurement points are
+    /// remapped into the new displayed frame (`from` is the method
+    /// before the toggle) so they stay glued to the measured feature.
+    fn on_orientation_changed(&mut self, from: Orientation) {
+        let to = self.orientation.method();
+        if to != from {
+            self.measure.remap(from, to, self.viewport.frame_size());
+            self.apply_overlays();
+        }
+        self.apply_orientation();
+    }
+
+    /// The active calibration's pixels-per-millimetre, or `None` —
+    /// measurements and grid/tick spacings fall back to pixels.
+    fn active_px_per_mm(&self) -> Option<f64> {
+        self.config.active_profile().map(|p| p.px_per_mm)
+    }
+
+    /// The effective overlay state: the persisted grid/crosshair plus
+    /// the runtime measurement layer converted by the calibration.
+    fn current_overlays(&self) -> Option<OverlayState> {
+        let mut state = self.config.overlays.clone();
+        state.measure = self.measure.overlay(self.active_px_per_mm());
+        overlays_for(self.mode, &state)
+    }
+
+    /// Measurement state changed (gesture, arm, delete, cancel): push
+    /// the overlay snapshot and resync the side-panel list.
+    fn measure_changed(&mut self, sender: &ComponentSender<Self>) {
+        self.apply_overlays();
+        self.sync_measure_ui(sender);
+    }
+
+    /// Arms/disarms the measurement tool: while armed the viewport
+    /// routes primary clicks/drags to the session and pans on the
+    /// middle button (§6.9). Arming also drops a pending wizard line.
+    fn arm_measure(&mut self, tool: Option<MeasureTool>, sender: &ComponentSender<Self>) {
+        if tool != Some(MeasureTool::Calibrate) {
+            self.pending_calibration = None;
+        }
+        self.measure.arm(tool);
+        self.viewport.set_measure_tool(tool);
+        self.measure_changed(sender);
+    }
+
+    /// Pushes measurement + calibration state into the side panel.
+    fn sync_measure_ui(&mut self, sender: &ComponentSender<Self>) {
+        if let Some(panel) = self.measure_panel.as_mut() {
+            crate::measure_ui::sync(panel, &self.measure, &self.config, sender);
+        }
+    }
+
+    /// The active calibration changed (select/create/delete): rekey
+    /// grid and tick spacings to the new unit, persist, refresh.
+    fn calibration_changed(&mut self, old_ppm: Option<f64>, sender: &ComponentSender<Self>) {
+        let new_ppm = self.active_px_per_mm();
+        self.config.overlays.grid.spacing =
+            self.config.overlays.grid.spacing.rekeyed(old_ppm, new_ppm);
+        self.config.overlays.crosshair.tick_spacing = self
+            .config
+            .overlays
+            .crosshair
+            .tick_spacing
+            .rekeyed(old_ppm, new_ppm);
+        self.persist_config();
+        self.apply_overlays();
+        self.sync_grid_unit();
+        self.sync_measure_ui(sender);
+    }
+
+    /// The reference line was drawn: remember it and open the wizard,
+    /// then disarm — the next tool arming starts a fresh session.
+    fn open_calibration_wizard(&mut self, a: Point, b: Point, sender: &ComponentSender<Self>) {
+        self.pending_calibration = Some((a, b));
+        let existing: Vec<String> = self
+            .config
+            .calibration
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        crate::measure_dialogs::open_calibration_dialog(
+            &self.window,
+            &self.viewport,
+            hiview_core::distance(a, b),
+            existing,
+            strings::calibration_default_name(self.config.calibration.len() + 1),
+            sender,
+        );
+        self.arm_measure(None, sender);
+    }
+
+    /// Grid spacing row title — the unit follows the calibration (§6.9).
+    fn grid_spacing_label(&self) -> &'static str {
+        if self.active_px_per_mm().is_some() {
+            strings::GRID_SPACING_MM_LABEL
+        } else {
+            strings::GRID_SPACING_PX_LABEL
+        }
+    }
+
+    /// The value the grid spacing row shows, in its current unit.
+    fn grid_spacing_display(&self) -> f64 {
+        match self.config.overlays.grid.spacing {
+            GridSpacing::Pixels(px) => px,
+            GridSpacing::Millimeters(mm) => mm,
+        }
+    }
+
+    /// Reconfigures the grid spacing row for its current unit — the
+    /// adjustment's range and digits can't come from a `#[watch]`.
+    fn sync_grid_unit(&self) {
+        let (value, lo, hi, step, digits) = if self.active_px_per_mm().is_some() {
+            (
+                self.grid_spacing_display(),
+                hiview_core::MIN_GRID_SPACING_MM,
+                hiview_core::MAX_GRID_SPACING_MM,
+                0.1,
+                2,
+            )
+        } else {
+            (
+                self.grid_spacing_display(),
+                hiview_core::MIN_GRID_SPACING_PX,
+                hiview_core::MAX_GRID_SPACING_PX,
+                5.0,
+                0,
+            )
+        };
+        self.grid_spacing_row
+            .set_adjustment(Some(&gtk::Adjustment::new(
+                value,
+                lo,
+                hi,
+                step,
+                step * 5.0,
+                0.0,
+            )));
+        self.grid_spacing_row.set_digits(digits);
+    }
+
+    /// PNG `tEXt` provenance for the next photo (§6.6, M8): app
+    /// version, mirror/rotation and the active calibration. JPEG
+    /// files carry no metadata (out of scope).
+    fn photo_png_text(&self) -> Vec<(String, String)> {
+        let mirror = match (self.orientation.mirror_h(), self.orientation.mirror_v()) {
+            (true, true) => "H+V",
+            (true, false) => "H",
+            (false, true) => "V",
+            (false, false) => "none",
+        };
+        let mut meta = vec![
+            (
+                "Software".into(),
+                format!("HiView {}", env!("CARGO_PKG_VERSION")),
+            ),
+            ("Mirror".into(), mirror.to_string()),
+            (
+                "Rotation".into(),
+                format!("{} deg CW", 90 * u32::from(self.orientation.quarters_cw())),
+            ),
+        ];
+        if let Some(p) = self.config.active_profile() {
+            meta.push(("Calibration".into(), p.name.clone()));
+            meta.push(("Calibration px/mm".into(), format!("{:.3}", p.px_per_mm)));
+        }
+        meta
     }
 
     /// Toggles the view-only freeze and its visual indicator.
@@ -1474,6 +1865,13 @@ impl AppModel {
         }
         self.mode = mode;
         self.config.mode = mode;
+        // Explorar stays clean: disarm any tool and drop a pending
+        // wizard line — committed measurements reappear on return.
+        if mode == AppMode::Explore {
+            self.measure.arm(None);
+            self.pending_calibration = None;
+            self.viewport.set_measure_tool(None);
+        }
         self.persist_config();
         self.apply_overlays();
         tracing::info!("mode switched to {mode:?}");
@@ -1483,8 +1881,7 @@ impl AppModel {
     /// `overlays_for` hides everything in Explorar and when all overlays
     /// are off; switching back to Bancada restores the saved settings.
     fn apply_overlays(&self) {
-        self.viewport
-            .set_overlays(overlays_for(self.mode, &self.config.overlays));
+        self.viewport.set_overlays(self.current_overlays());
     }
 
     /// Any overlay setting changed: persist and redraw.
@@ -1515,13 +1912,24 @@ impl AppModel {
             && let Some(frame) = self.viewport.photo_frame()
         {
             let overlays = if self.config.photo.burn_overlays {
-                overlays_for(self.mode, &self.config.overlays)
+                // Burn the committed measurements — never a
+                // half-finished draft (§6.9).
+                self.current_overlays().map(|mut s| {
+                    s.measure.draft = None;
+                    s
+                })
             } else {
                 None
             };
             if self
                 .photos
-                .take(&frame, &self.config.photo, self.photo_dir(), overlays)
+                .take(
+                    &frame,
+                    &self.config.photo,
+                    self.photo_dir(),
+                    overlays,
+                    self.photo_png_text(),
+                )
                 .is_ok()
             {
                 self.flash_shutter();

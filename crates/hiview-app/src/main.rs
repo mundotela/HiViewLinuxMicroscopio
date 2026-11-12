@@ -10,6 +10,8 @@ mod app;
 mod cli;
 mod components;
 mod focus;
+mod measure_dialogs;
+mod measure_ui;
 mod overlay;
 mod services;
 mod strings;

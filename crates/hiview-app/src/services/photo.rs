@@ -46,6 +46,8 @@ struct PhotoJob {
     dir: PathBuf,
     /// Overlays to burn into the photo (§6.6), already mode-filtered.
     overlays: Option<OverlayState>,
+    /// PNG `tEXt` metadata (§6.6, M8): calibration, transforms, version.
+    png_text: Vec<(String, String)>,
 }
 
 /// Handle to the background photo worker.
@@ -84,6 +86,7 @@ impl PhotoService {
                                 );
                             }
                         },
+                        &job.png_text,
                     )
                     .map_or_else(|e| PhotoOutcome::Failed(e.to_string()), PhotoOutcome::Saved);
                     on_done(outcome);
@@ -102,6 +105,7 @@ impl PhotoService {
     ///
     /// `overlays` are burned into the saved image by the same renderer
     /// the viewport uses (ADR-012); pass `None` for a clean photo.
+    /// `png_text` lands as PNG `tEXt` chunks (JPEG ignores it).
     ///
     /// # Errors
     /// Returns [`TakeRejected`] when the job could not be queued.
@@ -111,6 +115,7 @@ impl PhotoService {
         prefs: &PhotoConfig,
         dir: PathBuf,
         overlays: Option<OverlayState>,
+        png_text: Vec<(String, String)>,
     ) -> Result<(), TakeRejected> {
         let job = PhotoJob {
             data: frame.data.clone(),
@@ -120,6 +125,7 @@ impl PhotoService {
             prefs: prefs.clone(),
             dir,
             overlays,
+            png_text,
         };
         match self.jobs.try_send(job) {
             Ok(()) => Ok(()),
@@ -162,12 +168,12 @@ mod tests {
         let dir = PathBuf::from("/tmp");
         for _ in 0..PHOTO_QUEUE_CAPACITY {
             service
-                .take(&frame(), &prefs, dir.clone(), None)
+                .take(&frame(), &prefs, dir.clone(), None, Vec::new())
                 .unwrap_or_else(|e| panic!("queue should accept: {e:?}"));
         }
         // Receiver alive but never drained → the next shot is rejected.
         assert_eq!(
-            service.take(&frame(), &prefs, dir, None),
+            service.take(&frame(), &prefs, dir, None, Vec::new()),
             Err(TakeRejected::Busy)
         );
         drop(rx);
