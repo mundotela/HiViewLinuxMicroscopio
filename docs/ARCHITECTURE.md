@@ -212,7 +212,12 @@ Searching ──found──► Starting ──PLAYING──► Streaming
   - Interpolada 1600×1200 (equivale ao "2 MP" da caixa).
   - Upscale feito com Lanczos3 (crate `image`). A UI mostra a etiqueta "interpolada".
 - **Formato:** PNG (padrão, sem perda) ou JPEG (qualidade 92).
-- **Foto com redução de ruído:** média de N quadros consecutivos (4, 8 ou 16), acumulada em `f32` e só então convertida. Exige o microscópio parado. Ela coleta os quadros pelo assinante completo do FrameBus.
+- **Foto com redução de ruído (implementada no M10):** média de N quadros consecutivos (4, 8 ou 16; padrão desligada), coletados pelo assinante completo do FrameBus (`hiview-app::services::noise`), com prazo de 3 s pelo relógio de chegada. Exige o microscópio parado.
+  - **Acumulação inteira** em `hiview-core::average` (`FrameAverager`): soma `u32` por byte e divisão com arredondamento `(soma + N/2) / N`. É bit-exata e mais rápida que `f32`.
+  - **A média usa os quadros já ajustados** (§6.11). A LUT é por pixel e o unsharp mask é linear, então a ordem não importa (a menos do clamp em 0/255, que é desprezível). Não existe derivação "crua" no pipeline.
+  - **Quadro congelado:** sem média, a foto sai do quadro congelado. Disparos durante uma captura são ignorados. Girar fica bloqueado durante a captura. Desconexão ou prazo estourado cancelam com toast, sem arquivo parcial. Quadros pulados por descarte no canal são aceitos.
+  - **Metadado PNG** `noise_reduction_frames` = quantidade de quadros que entraram de fato na média (1 quando desligada ou congelada).
+  - **Medido no microscópio** (σ do ruído, referência independente de 64 quadros): 3,35 → 1,84 (N=4) → 1,42 (N=8) → 1,06 (N=16). N=4 e N=8 ficam dentro de ±20% de σ₁/√N. N=16 fica 26% acima, por ruído temporal correlacionado (oscilação de iluminação) que a média não cancela. A coleta leva ~33 ms por quadro (N=16 ≈ 0,53 s). Fixtures MP4 **não servem** para medir ruído (a compressão H.264 remove e correlaciona o ruído do sensor).
 - **Gravar sobreposições na foto** (opcional): o renderizador cairo desenha sobre um `cairo::ImageSurface` na resolução de saída.
 - Codificação e escrita em thread de trabalho (comando assíncrono do Relm4). **A thread da UI nunca bloqueia.**
 - Destino: `glib::user_special_dir(UserDirectory::Pictures)/HiView/`. Respeita o nome localizado da pasta, como "Imagens".

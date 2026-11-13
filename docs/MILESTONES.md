@@ -247,6 +247,8 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 
 ## M10 — Foto com redução de ruído
 
+> **Concluído em 2026-11-13** (merge `eaaa1e5`). O ruído cai 3,2× com 16 quadros no microscópio real. Os 7 itens do teste do Henrique passaram, incluindo o botão Snap. Relatório em `docs/reports/M10.md`.
+
 **Escopo:** opção "Redução de ruído" (média de 4/8/16 quadros), com barra de progresso curta e aviso "mantenha parado".
 
 **Critérios de aceite:** em foto de placa SMD, o ruído visivelmente menor na comparação lado a lado (avaliação do Henrique). Teste unitário da média.
