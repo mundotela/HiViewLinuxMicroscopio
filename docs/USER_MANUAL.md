@@ -58,11 +58,13 @@ Depois, procure **HiView** no menu de aplicativos.
 
 ### 3.2 Botão físico Snap (opcional)
 
-O sistema Linux atual não reconhece o botão Snap deste microscópio sozinho. O pacote extra `hiview-buttond` resolve isso:
+O sistema Linux atual não reconhece o botão Snap deste microscópio sozinho. Um pequeno serviço opcional, o `hiview-buttond`, resolve isso. Para instalar, rode dentro da pasta do projeto:
 
 ```bash
-sudo apt install ./hiview-buttond_<versão>_amd64.deb
+sudo ./scripts/install-buttond.sh
 ```
+
+O instalador compila o daemon, cria o grupo `hiview`, adiciona o seu usuário a ele e ativa o serviço. Para desinstalar: `sudo ./scripts/install-buttond.sh --uninstall`.
 
 **Depois de instalar, saia da sessão e entre novamente** (logout/login). Isso é necessário para liberar o acesso ao botão.
 
@@ -210,9 +212,9 @@ Com o componente opcional instalado (seção 3.2):
 | Clique curto | Tira foto |
 | Segurar ~1 segundo | Inicia/para a gravação |
 
-Você pode mudar o tempo do clique longo em Preferências → Botão físico. Lá também aparece o status do botão: **"conectado"** ou **"não disponível"**.
+Você pode mudar o tempo do clique longo em Preferências → **Botão físico** (padrão: 700 ms). A mesma página mostra o status do botão: **"Conectado via evdev"** (leitura direta do kernel), **"Conectado via serviço"** (daemon `hiview-buttond`) ou **"Não disponível"**.
 
-> O botão só funciona com o HiView aberto.
+> O botão só funciona com o HiView aberto e com o microscópio transmitindo imagem.
 
 ---
 
