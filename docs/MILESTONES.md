@@ -255,6 +255,21 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 
 ---
 
+## M10.5 — Áudio na gravação
+
+> **Concluído em 2026-11-13** (merge `7a31035`). Marco extra, puxado do backlog a pedido do Henrique. Relatório em `docs/reports/M10.5.md`.
+
+**Escopo:** microfone opcional na gravação (desligado por padrão), escolha do microfone, botão na barra (`Shift+R`), indicador com medidor de nível e trilha Opus no MP4, sincronizada pelo relógio da captura (`ARCHITECTURE.md §6.7`).
+
+**Critérios de aceite (cumpridos):**
+
+1. Áudio desligado → arquivo idêntico ao do M4 (1 trilha).
+2. Com áudio: 2 trilhas decodificáveis (`openh264dec` + `opusdec`) e sincronia ≤ 40 ms, mesmo com abertura lenta do microfone.
+3. Microfone ausente no início ou perdido no meio → vídeo válido + aviso.
+4. Teste físico do Henrique: teste da caneta (o som sai junto com a imagem), aperto longo do Snap com áudio, Galeria e player com som.
+
+---
+
 ## M11 — Empacotamento e acabamento
 
 **Escopo:**
@@ -289,4 +304,4 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
   - histerese/validação da duração apertar→soltar contra ajuste de relógio (NTP) no meio de um aperto (probabilidade mínima);
   - validar o caminho evdev quando existir hardware/kernel que gere `KEY_CAMERA`.
 - **Calibração por componente conhecido** (ideia de 2026-11-12): no assistente de calibração, além de digitar a distância, escolher numa lista de medidas padrão (passo de pinos SOIC 1,27 mm, TSSOP 0,65 mm, QFP 0,5 mm; corpos SMD 0402/0603/0805/1206). Facilita calibrar na altura de componentes altos, sem a lâmina, e torna a medição mais acessível.
-- **Áudio na gravação (decidido em 2026-11-11):** gravar o microfone do notebook junto com o vídeo, para narração. **Desligado por padrão**; o usuário liga por uma opção (interruptor na gravação e/ou Preferências → Vídeo). Indicador visível enquanto o áudio estiver sendo gravado. A definir na hora de implementar: o formato do áudio no MP4 (provavelmente Opus, compatível com o player do sistema) e a escolha do microfone quando houver mais de um.
+- ~~Áudio na gravação~~: feito no M10.5. Melhoria possível: continuar a gravação só com vídeo quando o microfone some no meio (hoje a gravação é finalizada com aviso).

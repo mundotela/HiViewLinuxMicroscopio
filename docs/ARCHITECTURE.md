@@ -246,6 +246,19 @@ appsrc name=src is-live=true format=time caps=video/x-raw,format=RGBA,width=W,he
 - Indicador de tempo de gravação e contador de quadros descartados (este só no modo Bancada).
 - Congelar fica bloqueado durante a gravação.
 
+**Áudio do microfone (implementado no M10.5, 2026-11-13).** É opcional e fica **desligado por padrão**: Preferências → Vídeo, ou o botão de microfone na barra (`Shift+R`), que é desabilitado durante a gravação.
+
+- **Trilha:** `pulsesrc` (via pipewire-pulse; dispositivo escolhido ou o padrão do sistema) `! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=1 ! level ! queue ! opusenc bitrate=64000 ! queue ! mp4mux`. É o mesmo mux do vídeo, e o vídeo não muda.
+- **Sincronia A/V:** o gravador usa o **mesmo `gst::Clock`** da captura, e o `base_time` é **definido** antes de PLAYING (`set_start_time(NONE)` + `set_base_time(clock.time())`), nunca estimado. O PTS do vídeo é convertido assim: running-time da captura + `base_time` da captura − `base_time` do gravador. A abertura do microfone (~90 ms no hardware) aparece como áudio começando depois, com PTS corretos, sem compensação manual. Uma fonte com 500 ms de atraso de abertura fica dentro de 24 ms de sincronia.
+- **Privacidade:** o microfone **só é aberto durante a gravação**. Não há pré-escuta, e nenhum dado de áudio vai para o log.
+- **Falhas:**
+  - microfone indisponível no início → grava só vídeo, com toast;
+  - microfone perdido no meio → EOS nas duas trilhas e finalização limpa, com toast.
+
+  Gravar nunca é bloqueado pelo áudio. O moov reservado continua recuperando arquivos com duas trilhas após `kill -9`.
+- **Indicador:** ícone de microfone + `LevelBar` (~8 Hz, alimentada pelo `level`) ao lado do tempo de gravação.
+- **Custo:** +2 a +8 pontos de um núcleo enquanto grava (é uma ação, fora do orçamento de regime).
+
 ### 6.8 Galeria
 
 > **Implementado no M5.** Pontos de projeto que se mostraram essenciais: **um único** componente de galeria durante toda a vida do app (página empurrada e retirada do `adw::NavigationView`); quadradinhos com **moldura fixa 4:3** e a miniatura contida nela; **clique simples abre**, Enter abre, e botão direito abre um **popover único** pendurado na grade; quadradinhos **não recebem o ponteiro** (`can_target=false`), por causa de um bug do GTK 4.14 com widgets reciclados; o mapeamento clique → item é feito pela grade. A gravação em andamento aparece como um quadradinho "Gravando…" identificado pelo caminho do arquivo (no máximo um por gravação).

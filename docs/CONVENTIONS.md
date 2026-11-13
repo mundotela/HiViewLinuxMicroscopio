@@ -204,6 +204,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 |---|---|
 | `Espaço` | Tirar foto |
 | `R` | Iniciar/parar gravação |
+| `Shift+R` | Ligar/desligar o áudio do microfone na próxima gravação |
 | `F` | Congelar/descongelar |
 | `G` | Grade |
 | `C` | Mira |
