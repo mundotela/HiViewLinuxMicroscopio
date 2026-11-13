@@ -25,6 +25,14 @@ static GST_INIT: LazyLock<()> = LazyLock::new(|| {
     hiview_capture::init().unwrap_or_else(|e| panic!("gst init: {e}"));
 });
 
+/// Serializes the tests that run real pipelines. With `cargo test`'s
+/// default thread count a dozen live GStreamer pipelines share the CPU
+/// and the single-threaded x264 encoder can fall behind real time —
+/// files then end early or EOS waits time out, none of which is the
+/// behavior under test. One pipeline at a time keeps every assertion
+/// meaningful.
+static PIPELINE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Recorder event sink for tests: any fatal error fails the test.
 fn panic_on_event(event: RecordEvent) {
     if let RecordEvent::Error(err) = event {
@@ -119,6 +127,7 @@ fn decode_frame_count(path: &std::path::Path) -> u64 {
 #[test]
 fn records_three_seconds_of_videotestsrc() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
     let bus = FrameBus::default();
     let (tx, _rx) = mpsc::channel();
@@ -206,6 +215,7 @@ fn publish_noise_frames(bus: &FrameBus, count: u64) {
 #[test]
 fn recording_stays_near_target_bitrate() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
     let bus = FrameBus::default();
     let recorder = Recorder::start(
@@ -241,6 +251,7 @@ fn recording_stays_near_target_bitrate() {
 #[test]
 fn recording_beyond_reserved_duration_finalizes_fully() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
     let bus = FrameBus::default();
     let recorder = Recorder::start_with_reserve(
@@ -282,6 +293,7 @@ fn recording_beyond_reserved_duration_finalizes_fully() {
 #[test]
 fn abrupt_teardown_beyond_reserve_keeps_real_duration() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
     let bus = FrameBus::default();
     let recorder = Recorder::start_with_reserve(
@@ -332,6 +344,7 @@ fn abrupt_teardown_beyond_reserve_keeps_real_duration() {
 #[test]
 fn source_death_mid_recording_keeps_playable_file() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
     let bus = FrameBus::default();
     let (tx, _rx) = mpsc::channel();
@@ -377,6 +390,7 @@ fn source_death_mid_recording_keeps_playable_file() {
 #[test]
 fn abrupt_teardown_keeps_killed_file_playable() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
     let bus = FrameBus::default();
     let (tx, _rx) = mpsc::channel();
@@ -439,16 +453,25 @@ fn abrupt_teardown_keeps_killed_file_playable() {
 // ---------------------------------------------------------------------
 
 /// Per-track stats collected by demux pad probes while decoding a file.
+/// `first_running`/`last_running` map each packet through its pad's
+/// segment — the demux applies the MP4 edit list, so raw `pts` is
+/// normalized while the running time is the position a player sees
+/// on the shared timeline (M10.5 A/V measurement).
 #[derive(Default)]
 struct TrackStats {
     buffers: u64,
     first_pts: Option<gst::ClockTime>,
     last_end: Option<gst::ClockTime>,
+    first_running: Option<gst::ClockTime>,
+    last_running: Option<gst::ClockTime>,
 }
 
 /// Starts a real capture pipeline (`videotestsrc`) and a recorder with
-/// `audiotestsrc` on the shared clock — the exact production wiring.
-fn start_av_recording(dir: &std::path::Path) -> (CapturePipeline, Recorder, FrameBus) {
+/// an audio source on the shared clock — the exact production wiring.
+fn start_av_recording(
+    dir: &std::path::Path,
+    audio: AudioSource,
+) -> (CapturePipeline, Recorder, FrameBus) {
     let bus = FrameBus::default();
     let (tx, _rx) = mpsc::channel();
     let pipeline = CapturePipeline::start(CaptureSource::Test, bus.clone(), move |e| {
@@ -471,7 +494,7 @@ fn start_av_recording(dir: &std::path::Path) -> (CapturePipeline, Recorder, Fram
         1,
         dir,
         RecorderOptions {
-            audio: Some(AudioSource::Test),
+            audio: Some(audio),
             clock_ref: Some(clock_ref),
         },
         panic_on_event,
@@ -550,15 +573,33 @@ fn decode_track_stats(path: &std::path::Path) -> (TrackStats, TrackStats) {
         // Count packets and track the timestamp range *at the demux
         // pad* — MP4 timestamps, before any decoding shifts them.
         let cell = stats;
-        pad.add_probe(gst::PadProbeType::BUFFER, move |_pad, info| {
+        pad.add_probe(gst::PadProbeType::BUFFER, move |pad, info| {
             if let Some(buffer) = info.buffer() {
                 let mut s = cell.lock().unwrap_or_else(|e| e.into_inner());
                 s.buffers += 1;
+                let running = buffer.pts().and_then(|pts| {
+                    pad.sticky_event::<gst::event::Segment>(0).and_then(|ev| {
+                        if let gst::EventView::Segment(seg) = ev.view() {
+                            seg.segment()
+                                .clone()
+                                .downcast::<gst::ClockTime>()
+                                .ok()
+                                .and_then(|s| s.to_running_time(pts))
+                        } else {
+                            None
+                        }
+                    })
+                });
                 if s.first_pts.is_none() {
                     s.first_pts = buffer.pts();
+                    s.first_running = running;
                 }
                 if let Some(pts) = buffer.pts() {
                     s.last_end = Some(pts + buffer.duration().unwrap_or(gst::ClockTime::ZERO));
+                    if let Some(run) = running {
+                        s.last_running =
+                            Some(run + buffer.duration().unwrap_or(gst::ClockTime::ZERO));
+                    }
                 }
             }
             gst::PadProbeReturn::Ok
@@ -571,7 +612,10 @@ fn decode_track_stats(path: &std::path::Path) -> (TrackStats, TrackStats) {
         .set_state(gst::State::Playing)
         .unwrap_or_else(|e| panic!("decode start: {e}"));
     let bus = pipeline.bus().unwrap_or_else(|| panic!("no bus"));
-    let deadline = Instant::now() + TIMEOUT;
+    // Several recorder tests decode at once under `cargo test`'s
+    // default thread count — give the demux/decode pipelines a wide
+    // margin for CPU starvation.
+    let deadline = Instant::now() + Duration::from_secs(90);
     loop {
         if Instant::now() > deadline {
             panic!("decode pipeline never reached EOS");
@@ -606,8 +650,9 @@ fn decode_track_stats(path: &std::path::Path) -> (TrackStats, TrackStats) {
 #[test]
 fn records_video_and_audio_tracks_in_sync() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
-    let (pipeline, recorder, _bus) = start_av_recording(&dir);
+    let (pipeline, recorder, _bus) = start_av_recording(&dir, AudioSource::Test);
     assert!(recorder.has_audio(), "audio track should be present");
 
     std::thread::sleep(Duration::from_secs(3));
@@ -651,8 +696,62 @@ fn records_video_and_audio_tracks_in_sync() {
             end.seconds_f64()
         );
     }
-    let v0 = video.first_pts.unwrap_or_else(|| panic!("no video pts"));
-    let a0 = audio.first_pts.unwrap_or_else(|| panic!("no audio pts"));
+    let v0 = video
+        .first_running
+        .unwrap_or_else(|| panic!("no video pts"));
+    let a0 = audio
+        .first_running
+        .unwrap_or_else(|| panic!("no audio pts"));
+    let delta = v0.nseconds().abs_diff(a0.nseconds());
+    assert!(
+        delta <= 40_000_000,
+        "A/V start offset {delta} ns exceeds the 40 ms bound"
+    );
+}
+
+/// M10.5 regression for the deterministic `base_time`: the injected
+/// source sleeps 500 ms inside NULL→READY — the same place a real
+/// `pulsesrc` spends opening its device inside `set_state(Playing)`.
+/// With the explicit `use_clock` + `set_base_time` + `set_start_time`
+/// trio the delay pushes *both* tracks forward on the shared timeline
+/// (set_state returns late → the video feeder starts late, and audio
+/// lands at its true timestamp). Under the old estimate-the-base_time
+/// scheme the pipeline stamped base_time *after* the slow child, so
+/// the whole delay leaked into the video PTS as a ~500 ms offset —
+/// this test fails in exactly that way.
+#[test]
+fn delayed_microphone_open_keeps_av_in_sync() {
+    LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = temp_dir();
+    let (pipeline, recorder, _bus) = start_av_recording(
+        &dir,
+        AudioSource::Delayed {
+            delay: Duration::from_millis(500),
+        },
+    );
+    assert!(recorder.has_audio(), "audio track should be present");
+
+    std::thread::sleep(Duration::from_secs(2));
+    let stop = recorder.stop();
+    assert!(stop.error.is_none(), "unclean stop: {:?}", stop.error);
+    drop(pipeline);
+
+    let (video, audio) = decode_track_stats(&stop.path);
+    let v0 = video
+        .first_running
+        .unwrap_or_else(|| panic!("no video pts"));
+    let a0 = audio
+        .first_running
+        .unwrap_or_else(|| panic!("no audio pts"));
+    // The demux running time maps each packet through the MP4 edit
+    // list, so this delta is the true timeline gap a player would
+    // show between the tracks' first buffers. Under the old
+    // estimate-the-base_time scheme the 500 ms open delay leaked into
+    // the video PTS (estimate taken before the transition, base
+    // stamped after the slow child) → delta ≈ 500 ms. With the
+    // explicit use_clock/set_base_time/set_start_time trio the delay
+    // pushes both tracks forward together → delta stays ≤ 40 ms.
     let delta = v0.nseconds().abs_diff(a0.nseconds());
     assert!(
         delta <= 40_000_000,
@@ -666,6 +765,7 @@ fn records_video_and_audio_tracks_in_sync() {
 #[test]
 fn mic_failure_at_start_records_video_only() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
     let bus = FrameBus::default();
     let recorder = Recorder::start(
@@ -704,8 +804,9 @@ fn mic_failure_at_start_records_video_only() {
 #[test]
 fn abrupt_teardown_with_audio_keeps_playable() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
-    let (pipeline, recorder, _bus) = start_av_recording(&dir);
+    let (pipeline, recorder, _bus) = start_av_recording(&dir, AudioSource::Test);
 
     std::thread::sleep(Duration::from_millis(2500));
     let path = recorder.path().to_path_buf();
@@ -750,6 +851,7 @@ fn abrupt_teardown_with_audio_keeps_playable() {
 #[test]
 fn audio_loss_mid_recording_finalizes_cleanly() {
     LazyLock::force(&GST_INIT);
+    let _pipeline = PIPELINE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = temp_dir();
     let bus = FrameBus::default();
     let (tx, _rx) = mpsc::channel();

@@ -82,6 +82,15 @@ pub enum AudioSource {
     /// Always fails to construct — exercises the "microphone
     /// unavailable" fallback that records video-only.
     Failing,
+    /// `audiotestsrc` wrapped so its NULL→READY transition sleeps —
+    /// reproduces a real `pulsesrc` opening its device *inside* the
+    /// pipeline's `set_state` call (M10.5 deterministic-base_time
+    /// test). The delay must cover at least the A/V tolerance.
+    #[doc(hidden)]
+    Delayed {
+        /// How long the source transition takes.
+        delay: std::time::Duration,
+    },
 }
 
 /// The capture pipeline's clock and base time (M10.5, §6.7 A/V sync).
@@ -410,25 +419,25 @@ impl Recorder {
         } = built;
 
         // A/V sync (§6.7, M10.5): share the capture clock so one time
-        // base serves both pipelines. Video PTS arrives as *capture
-        // running time*; translating it to recorder running time needs
-        // both base times, known only once each pipeline is Playing.
-        if let Some(reference) = &options.clock_ref {
+        // base serves both pipelines, and fix the recorder's base_time
+        // OURSELVES instead of letting the transition stamp it. The
+        // canonical pattern is `use_clock` + `set_start_time(NONE)` +
+        // `set_base_time`: with start_time invalid the pipeline never
+        // recomputes base_time, so `rec_base` below is *the* value —
+        // not an estimate. This matters when a child is slow inside
+        // `set_state` (a real `pulsesrc` can take hundreds of ms to
+        // open): without an explicit base_time the pipeline stamps it
+        // *after* the slow child, and the whole open latency leaks
+        // into every video PTS. With it, a slow microphone simply
+        // makes the audio track start later on the shared timeline —
+        // correct and synchronized; never compensated manually.
+        let rec_base = options.clock_ref.as_ref().map(|reference| {
             pipeline.use_clock(Some(&reference.clock));
-        }
-
-        // A/V sync (M10.5): the pipeline stamps its `base_time` from the
-        // shared clock during the READY→PAUSED step inside this very
-        // `set_state` call — so a clock reading taken just before it
-        // estimates `rec_base_time` within a few milliseconds, far
-        // inside the 40 ms A/V bound. Reading `base_time()` back instead
-        // would require waiting for Playing, which deadlocks here: the
-        // pipeline cannot finish preroll until the appsrc gets video
-        // buffers, and those only flow after the feeder spawns below.
-        let rec_base_estimate = options
-            .clock_ref
-            .as_ref()
-            .map(|reference| reference.clock.time());
+            pipeline.set_start_time(gst::ClockTime::NONE);
+            let base = reference.clock.time();
+            pipeline.set_base_time(base);
+            base
+        });
         if let Err(err) = pipeline.set_state(gst::State::Playing) {
             if has_audio {
                 // The audio source failed to reach Playing (dead
@@ -454,11 +463,26 @@ impl Recorder {
         }
 
         let pts_offset = options.clock_ref.and_then(|reference| {
-            rec_base_estimate.map(|rec_base| {
+            rec_base.map(|rec_base| {
                 // rec_running = cap_running + cap_base − rec_base.
                 reference.base_time.nseconds() as i64 - rec_base.nseconds() as i64
             })
         });
+
+        // Frames queued while the record pipeline was still coming up
+        // — build + `set_state`, which can take hundreds of ms with a
+        // real `pulsesrc` opening — predate the recorder's go-live and
+        // do not belong in the file. Draining here (right after the
+        // transition, on this thread) is what keeps the first video
+        // PTS on the same timeline spot as the audio track's first
+        // PTS (M10.5). Pushing the backlog would also stamp many
+        // frames at the same clamped zero, and duplicated PTS makes
+        // `h264parse` emit timestamp-less buffers that `mp4mux`
+        // rejects.
+        let backlog = subscription.drain();
+        if backlog > 0 {
+            debug!("recorder discarded {backlog} pre-record frames");
+        }
 
         let feeding = Arc::new(AtomicBool::new(true));
         let dropped = subscription.dropped_counter();
@@ -816,18 +840,31 @@ fn build_audio_branch(
     mux: &gst::Element,
     source: &AudioSource,
 ) -> Result<(gst::Element, Arc<AtomicU64>), Error> {
-    let asrc = match source {
+    // `eos_target` is the element that receives stop-time EOS — the
+    // real source inside the wrapper for `Delayed`.
+    let (asrc, eos_target) = match source {
         AudioSource::Pulse { device } => {
             let src = make("pulsesrc")?;
             if let Some(device) = device {
                 src.set_property("device", device);
             }
-            src
+            let eos = src.clone();
+            (src, eos)
         }
         AudioSource::Test => {
             let src = make("audiotestsrc")?;
             src.set_property("is-live", true);
-            src
+            let eos = src.clone();
+            (src, eos)
+        }
+        AudioSource::Delayed { delay } => {
+            let src = make("audiotestsrc")?;
+            src.set_property("is-live", true);
+            src.set_property("name", format!("{AUDIO_NAME_PREFIX}-src-inner"));
+            (
+                crate::delayed_bin::DelayedBin::new(&src, *delay)?.upcast(),
+                src,
+            )
         }
         AudioSource::Failing => {
             return Err(Error::VideoDevice("injected audio source failure".into()));
@@ -868,6 +905,12 @@ fn build_audio_branch(
     let aenc = make("opusenc")?;
     aenc.set_property_from_str("bitrate", &OPUS_BITRATE_BPS.to_string());
     let queue_out = make("queue")?;
+    // Short audio queues (~250 ms): a mid-recording audio EOS must
+    // actually cut the track near the loss point — a deep queue
+    // drains its backlog through after the EOS and the tail of the
+    // file would still contain ~1 s of "post-loss" audio (M10.5).
+    queue_in.set_property("max-size-time", 250_000_000_u64);
+    queue_out.set_property("max-size-time", 250_000_000_u64);
 
     for (index, element) in [&aconv, &ares, &acaps, &queue_in, &aenc, &queue_out]
         .into_iter()
@@ -895,7 +938,7 @@ fn build_audio_branch(
         .link(&mux_pad)
         .map_err(Error::Link)?;
 
-    Ok((asrc, level_cell))
+    Ok((eos_target, level_cell))
 }
 
 /// Consumes the subscription and pushes buffers until `feeding` is

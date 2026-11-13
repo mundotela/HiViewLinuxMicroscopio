@@ -4,6 +4,7 @@
 //! Video capture hardware layer for HiView: camera discovery (udev/V4L2),
 //! hotplug monitoring and GStreamer pipelines delivering frames to the UI.
 
+mod delayed_bin;
 mod device;
 mod error;
 mod events;
