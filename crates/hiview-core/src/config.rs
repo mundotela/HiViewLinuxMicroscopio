@@ -25,6 +25,8 @@ use crate::overlay::{AppMode, OverlayState};
 pub struct AppConfig {
     /// Photo preferences.
     pub photo: PhotoConfig,
+    /// Recording/video preferences, serialized as `[video]` (M10.5).
+    pub video: VideoConfig,
     /// Explorar/Bancada mode (`M` toggles it).
     pub mode: AppMode,
     /// Grid and crosshair overlay settings (§6.9).
@@ -107,6 +109,20 @@ impl Default for ButtonConfig {
     fn default() -> Self {
         Self { long_press_ms: 700 }
     }
+}
+
+/// The `[video]` section — recording preferences (M10.5). Every field
+/// defaults to the privacy-preserving choice: no audio in files.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VideoConfig {
+    /// Record the microphone as an Opus track inside the MP4. Off by
+    /// default — no audio enters a file unless the user opted in, and
+    /// the file keeps the M4 single-track shape.
+    pub record_audio: bool,
+    /// PulseAudio source name for the microphone; `None` records the
+    /// system default input ("Padrão do sistema" in the UI).
+    pub microphone: Option<String>,
 }
 
 /// Frame counts offered by the "Redução de ruído" combo (M10):

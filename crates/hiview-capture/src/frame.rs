@@ -83,6 +83,19 @@ impl FrameSubscription {
         self.rx.recv_timeout(timeout)
     }
 
+    /// Drains every buffered frame, counting them as dropped. Used by
+    /// the recorder to discard frames captured while its pipeline was
+    /// still coming up — they predate the recording's time base and do
+    /// not belong in the file (M10.5).
+    pub fn drain(&self) -> u64 {
+        let mut drained = 0;
+        while self.rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        self.dropped.fetch_add(drained, Ordering::Relaxed);
+        drained
+    }
+
     /// Frames dropped because this subscription's queue was full.
     #[must_use]
     pub fn dropped_count(&self) -> u64 {

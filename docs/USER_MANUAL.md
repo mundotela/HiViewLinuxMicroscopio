@@ -200,6 +200,20 @@ permanece nítido. O resultado é uma foto bem mais limpa.
 - Durante a gravação, **girar** e **congelar** ficam desativados.
 - Cada minuto ocupa cerca de 15–20 MB. O HiView avisa se o disco estiver quase cheio.
 
+### 8.1 Gravar com som (opcional)
+
+Por padrão os vídeos saem **sem som**. Para gravar também a voz (útil para narrar o que está sendo observado):
+
+- Ligue em **Preferências → Vídeo → Gravar áudio do microfone**, ou clique no botão de **microfone** na barra flutuante, ou aperte `Shift+R`. Os três fazem a mesma coisa.
+- Em **Microfone** você escolhe qual entrada usar; **Padrão do sistema** atende a maioria dos casos.
+- Gravando com som, aparecem no indicador vermelho um **ícone de microfone** e um **medidor** que se mexe conforme você fala — assim dá para ver que o som está entrando.
+- O botão de microfone fica **desativado durante a gravação**: não dá para ligar ou desligar o som no meio de um vídeo.
+- Vale para qualquer forma de iniciar a gravação: botão, `R` e o clique longo do botão Snap.
+
+**Privacidade:** o microfone só é aberto durante a gravação — o HiView não escuta nada em nenhum outro momento. Com a opção desligada (padrão), o vídeo sai exatamente como antes, sem trilha de som.
+
+**Se o microfone faltar:** a gravação nunca é bloqueada por causa do som. Se o microfone não puder ser aberto, aparece o aviso "Microfone indisponível: gravando sem áudio" e o vídeo é gravado normalmente, mudo. Se o microfone for desconectado **no meio** da gravação, o vídeo é finalizado na hora com um aviso — o arquivo fica válido, com som até o ponto em que o microfone parou.
+
 ---
 
 ## 9. Galeria
@@ -346,6 +360,7 @@ Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 |---|---|
 | `Espaço` | Tirar foto |
 | `R` | Iniciar/parar gravação |
+| `Shift+R` | Ligar/desligar o microfone nas gravações |
 | `F` | Congelar/descongelar |
 | `G` | Grade (modo Bancada) |
 | `C` | Mira (modo Bancada) |

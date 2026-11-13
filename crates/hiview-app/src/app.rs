@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 
 use hiview_button::{ButtonEdge, ButtonEvent, SourceKind, SourceState, SourceUpdate, pick_source};
 use hiview_capture::{
-    CameraDescriptor, CameraEvent, CameraState, RecordDenied, RecordStop, Recorder,
-    check_disk_space,
+    AudioSource, CameraDescriptor, CameraEvent, CameraState, RecordDenied, RecordEvent, RecordStop,
+    Recorder, RecorderOptions, check_disk_space,
 };
 use hiview_core::{
     AdjustKind, AppConfig, AppMode, ButtonTracker, CalibrationProfile, CrosshairStyle, GridSpacing,
@@ -147,6 +147,7 @@ relm4::new_stateless_action!(FullscreenAction, WindowActionGroup, "fullscreen");
 relm4::new_stateless_action!(EscapeAction, WindowActionGroup, "escape");
 relm4::new_stateless_action!(TakePhotoAction, WindowActionGroup, "take-photo");
 relm4::new_stateless_action!(RecordAction, WindowActionGroup, "record");
+relm4::new_stateless_action!(ToggleMicAction, WindowActionGroup, "toggle-mic");
 relm4::new_stateless_action!(PreferencesAction, WindowActionGroup, "preferences");
 relm4::new_stateless_action!(GalleryAction, WindowActionGroup, "gallery");
 relm4::new_stateless_action!(ToggleModeAction, WindowActionGroup, "toggle-mode");
@@ -193,6 +194,9 @@ fn shortcut_action(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> Option<
         k if k == Key::F11 => Some("win.fullscreen"),
         k if k == Key::Escape => Some("win.escape"),
         k if k == Key::space => Some("win.take-photo"),
+        k if k == Key::r && state.contains(gtk::gdk::ModifierType::SHIFT_MASK) => {
+            Some("win.toggle-mic")
+        }
         k if k == Key::r => Some("win.record"),
         k if k == Key::m => Some("win.toggle-mode"),
         k if k == Key::g => Some("win.toggle-grid"),
@@ -252,12 +256,20 @@ pub enum Input {
     ShutterModeToggled,
     /// Start/stop a recording (`R` or the video-mode shutter).
     ToggleRecord,
-    /// `Recorder::start` finished on the worker thread.
-    RecordStarted(Result<Recorder, String>),
+    /// `Recorder::start` finished on the worker thread; the flag is
+    /// whether the user had asked for an audio track (drives the
+    /// "microphone unavailable" toast when the fallback recorded
+    /// video-only).
+    RecordStarted(Result<Recorder, String>, bool),
     /// One-second tick while recording (elapsed + dropped counters).
     RecordTick,
+    /// Fast tick that refreshes the microphone level meter (~8 Hz).
+    MicLevelTick,
     /// The record pipeline reported a fatal error mid-recording.
     RecordFailed(String),
+    /// The microphone died mid-recording — finalize the file with
+    /// both tracks (M10.5 minimum-accepted behavior).
+    RecordAudioLost,
     /// `Recorder::stop` finished; carries the finalize outcome.
     RecordStopped(RecordStop),
     /// The window close button was pressed.
@@ -276,6 +288,13 @@ pub enum Input {
     NoiseUpdate(NoiseOutcome),
     /// A new photo folder was picked in the preferences dialog.
     SetPhotoFolder(PathBuf),
+    /// The toolbar microphone toggle was clicked (`Shift+R`).
+    MicToggled,
+    /// The "Gravar áudio do microfone" preferences switch changed.
+    SetRecordAudio(bool),
+    /// The microphone preferences combo changed — `None` is the
+    /// system default input (M10.5).
+    SetMicrophone(Option<String>),
     /// Open the gallery page (`Ctrl+G` or the header button).
     ToggleGallery,
     /// The gallery page was popped off the navigation stack.
@@ -413,6 +432,8 @@ pub struct AppModel {
     debug_overlay: bool,
     /// Elapsed recording time shown in the red indicator.
     record_elapsed: String,
+    /// Latest microphone peak 0..1 feeding the level meter (M10.5).
+    mic_level: f32,
     /// Dropped-frame counter (debug overlay only).
     drops_label: String,
     /// Navigation stack: live page plus the pushed gallery page (§6.8).
@@ -775,6 +796,19 @@ impl SimpleComponent for AppModel {
                             gtk::Image {
                                 set_icon_name: Some("media-record-symbolic"),
                             },
+                            gtk::Image {
+                                set_icon_name: Some("audio-input-microphone-symbolic"),
+                                #[watch]
+                                set_visible: model.recording_has_audio(),
+                            },
+                            gtk::LevelBar {
+                                #[watch]
+                                set_visible: model.recording_has_audio(),
+                                #[watch]
+                                set_value: model.mic_level as f64,
+                                set_width_request: 48,
+                                set_valign: gtk::Align::Center,
+                            },
                             gtk::Label {
                                 #[watch]
                                 set_label: &model.record_elapsed,
@@ -863,6 +897,22 @@ impl SimpleComponent for AppModel {
                                 set_css_classes: model.shutter_css(),
                                 set_focusable: false,
                                 connect_clicked => Input::Shutter,
+                            },
+                            // M10.5: microphone toggle mirroring the
+                            // "Gravar áudio" preference; a track cannot
+                            // be added mid-file, so it is disabled
+                            // while a recording is active.
+                            gtk::ToggleButton {
+                                #[watch]
+                                set_icon_name: model.mic_icon(),
+                                set_tooltip_text: Some(strings::MIC_TOGGLE_TOOLTIP),
+                                set_has_frame: false,
+                                set_focusable: false,
+                                #[watch]
+                                set_active: model.config.video.record_audio,
+                                #[watch]
+                                set_sensitive: model.recording.is_none(),
+                                connect_clicked => Input::MicToggled,
                             },
                             gtk::Separator {
                                 set_orientation: gtk::Orientation::Vertical,
@@ -1034,6 +1084,7 @@ impl SimpleComponent for AppModel {
             rec_supported: hiview_capture::available_encoder().is_some(),
             debug_overlay: init.debug_overlay,
             record_elapsed: String::new(),
+            mic_level: 0.0,
             drops_label: strings::drops_label(0),
             nav_view: adw::NavigationView::new(),
             gallery,
@@ -1149,6 +1200,7 @@ impl SimpleComponent for AppModel {
         view_action!(EscapeAction, Input::Escape);
         view_action!(TakePhotoAction, Input::TakePhoto);
         view_action!(RecordAction, Input::ToggleRecord);
+        view_action!(ToggleMicAction, Input::MicToggled);
         view_action!(PreferencesAction, Input::OpenPreferences);
         view_action!(GalleryAction, Input::ToggleGallery);
         view_action!(ToggleModeAction, Input::ToggleMode);
@@ -1308,7 +1360,9 @@ impl SimpleComponent for AppModel {
                 };
             }
             Input::ToggleRecord => self.toggle_record(&sender),
-            Input::RecordStarted(result) => self.on_record_started(result, &sender),
+            Input::RecordStarted(result, want_audio) => {
+                self.on_record_started(result, want_audio, &sender);
+            }
             Input::RecordTick => {
                 if let Some(active) = &self.recording {
                     self.record_elapsed =
@@ -1321,10 +1375,27 @@ impl SimpleComponent for AppModel {
                     Self::schedule_record_tick(&sender);
                 }
             }
+            Input::MicLevelTick => {
+                if let Some(active) = &self.recording
+                    && let Some(level) = active.recorder.audio_level()
+                {
+                    self.mic_level = level;
+                    Self::schedule_mic_tick(&sender);
+                }
+            }
             Input::RecordFailed(detail) => {
                 tracing::error!("record pipeline reported an error: {detail}");
                 if let Some(active) = self.recording.take() {
                     self.begin_finalize(active, StopReason::Failed, &sender);
+                }
+            }
+            Input::RecordAudioLost => {
+                // M10.5 minimum path: the muxer already got EOS on the
+                // audio pad — finalize the file now with a toast.
+                tracing::warn!("microphone lost mid-recording; finalizing");
+                self.show_toast(adw::Toast::new(strings::MIC_LOST));
+                if let Some(active) = self.recording.take() {
+                    self.begin_finalize(active, StopReason::AudioLost, &sender);
                 }
             }
             Input::RecordStopped(stop) => self.on_record_stopped(stop),
@@ -1466,6 +1537,21 @@ impl SimpleComponent for AppModel {
             Input::SetBurnOverlays(burn) => {
                 if self.config.photo.burn_overlays != burn {
                     self.config.photo.burn_overlays = burn;
+                    self.persist_config();
+                }
+            }
+            Input::MicToggled => {
+                if self.recording.is_some() {
+                    // A track cannot be added mid-file — the button is
+                    // already insensitive, this guards the shortcut.
+                    return;
+                }
+                self.set_record_audio(!self.config.video.record_audio);
+            }
+            Input::SetRecordAudio(on) => self.set_record_audio(on),
+            Input::SetMicrophone(device) => {
+                if self.config.video.microphone != device {
+                    self.config.video.microphone = device;
                     self.persist_config();
                 }
             }
@@ -2343,6 +2429,16 @@ impl AppModel {
         };
         let dir = videos_root.join("HiView");
         let subscription = self.camera.frame_bus().subscribe();
+        // M10.5: the mic is only opened now, inside the record
+        // pipeline — never for preview or monitoring. The shared clock
+        // puts video and audio on one timeline (§6.7 A/V sync).
+        let want_audio = self.config.video.record_audio;
+        let options = RecorderOptions {
+            audio: want_audio.then(|| AudioSource::Pulse {
+                device: self.config.video.microphone.clone(),
+            }),
+            clock_ref: self.camera.clock_ref(),
+        };
         self.record_transition = true;
         let worker = sender.clone();
         let reporter = sender.clone();
@@ -2354,10 +2450,14 @@ impl AppModel {
                 30,
                 1,
                 &dir,
-                move |detail| reporter.input(Input::RecordFailed(detail)),
+                options,
+                move |event| match event {
+                    RecordEvent::Error(detail) => reporter.input(Input::RecordFailed(detail)),
+                    RecordEvent::AudioLost => reporter.input(Input::RecordAudioLost),
+                },
             )
             .map_err(|e| e.to_string());
-            worker.input(Input::RecordStarted(result));
+            worker.input(Input::RecordStarted(result, want_audio));
         });
     }
 
@@ -2366,6 +2466,17 @@ impl AppModel {
     fn schedule_record_tick(sender: &ComponentSender<Self>) {
         let sender = sender.clone();
         glib::timeout_add_seconds_local_once(1, move || sender.input(Input::RecordTick));
+    }
+
+    /// Kicks the ~8 Hz tick refreshing the microphone level meter
+    /// (M10.5). The `level` element posts at 100 ms; the UI simply
+    /// reads the latest coalesced value, so nothing is logged per
+    /// message (CONVENTIONS §7: toasts only on state changes).
+    fn schedule_mic_tick(sender: &ComponentSender<Self>) {
+        let sender = sender.clone();
+        glib::timeout_add_local_once(std::time::Duration::from_millis(120), move || {
+            sender.input(Input::MicLevelTick);
+        });
     }
 
     /// Finalizes a recording off the UI thread (section 7): `stop()` can
@@ -2379,6 +2490,7 @@ impl AppModel {
         self.record_transition = true;
         self.stop_reason = Some(reason);
         self.record_elapsed.clear();
+        self.mic_level = 0.0;
         self.drops_label.clear();
         let worker = sender.clone();
         std::thread::spawn(move || {
@@ -2391,6 +2503,7 @@ impl AppModel {
     fn on_record_started(
         &mut self,
         result: Result<Recorder, String>,
+        want_audio: bool,
         sender: &ComponentSender<Self>,
     ) {
         self.record_transition = false;
@@ -2409,7 +2522,14 @@ impl AppModel {
                 return;
             }
             Ok(recorder) => {
-                tracing::info!("recording started");
+                // M10.5: recording is never blocked by the mic — when
+                // the audio track could not be built the file simply
+                // has no sound, and the user is told once.
+                if want_audio && !recorder.has_audio() {
+                    self.show_toast(adw::Toast::new(strings::MIC_UNAVAILABLE));
+                }
+                let has_audio = recorder.has_audio();
+                tracing::info!("recording started (audio={has_audio})");
                 self.gallery.emit(GalleryInput::RecordingStarted(
                     recorder.path().to_path_buf(),
                 ));
@@ -2418,9 +2538,13 @@ impl AppModel {
                     started: Instant::now(),
                 });
                 self.record_elapsed = strings::elapsed_label(0);
+                self.mic_level = 0.0;
                 self.gallery
                     .emit(GalleryInput::RecordElapsed(self.record_elapsed.clone()));
                 Self::schedule_record_tick(sender);
+                if has_audio {
+                    Self::schedule_mic_tick(sender);
+                }
             }
             Err(err) => {
                 tracing::error!("recording failed to start: {err}");
@@ -2556,6 +2680,32 @@ impl AppModel {
                 self.show_toast(adw::Toast::new(strings::PHOTO_SAVE_FAILED));
             }
         }
+    }
+
+    /// Persists the "Gravar áudio do microfone" flag shared by the
+    /// preferences switch, the toolbar toggle and `Shift+R` (M10.5).
+    fn set_record_audio(&mut self, on: bool) {
+        if self.config.video.record_audio != on {
+            self.config.video.record_audio = on;
+            self.persist_config();
+        }
+    }
+
+    /// Toolbar microphone toggle icon — active input vs. disabled.
+    fn mic_icon(&self) -> &'static str {
+        if self.config.video.record_audio {
+            "audio-input-microphone-symbolic"
+        } else {
+            "microphone-disabled-symbolic"
+        }
+    }
+
+    /// Whether the in-flight recording actually carries an audio track
+    /// (drives the mic icon and the level meter in the indicator).
+    fn recording_has_audio(&self) -> bool {
+        self.recording
+            .as_ref()
+            .is_some_and(|active| active.recorder.has_audio())
     }
 
     /// Writes the current config off the UI thread (section 7).
@@ -2862,6 +3012,61 @@ impl AppModel {
         page.add(&group);
         dialog.add(&page);
 
+        // "Vídeo" page (M10.5): microphone recording opt-in plus the
+        // source combo. The mic itself is only opened while a
+        // recording runs — never for preview or monitoring.
+        let vpage = adw::PreferencesPage::new();
+        vpage.set_title(strings::PREFS_VIDEO_PAGE);
+        vpage.set_icon_name(Some("camera-video-symbolic"));
+        let vgroup = adw::PreferencesGroup::new();
+        vgroup.set_title(strings::PREFS_VIDEO_PAGE);
+
+        let audio_row = adw::SwitchRow::new();
+        audio_row.set_title(strings::PREFS_RECORD_AUDIO_LABEL);
+        audio_row.set_active(self.config.video.record_audio);
+        audio_row.connect_active_notify({
+            let sender = sender.clone();
+            move |row| sender.input(Input::SetRecordAudio(row.is_active()))
+        });
+        vgroup.add(&audio_row);
+
+        let mics = hiview_capture::audio_sources();
+        let mut labels = vec![strings::MIC_DEFAULT_LABEL.to_string()];
+        labels.extend(mics.iter().map(|m| m.display_name.clone()));
+        let mic_row = adw::ComboRow::new();
+        crate::measure_ui::swallow_scroll(&mic_row);
+        mic_row.set_title(strings::PREFS_MIC_LABEL);
+        let model = gtk::StringList::new(&[]);
+        for label in &labels {
+            model.append(label);
+        }
+        mic_row.set_model(Some(&model));
+        let selected = self
+            .config
+            .video
+            .microphone
+            .as_ref()
+            .and_then(|name| mics.iter().position(|m| &m.device_name == name))
+            .map(|pos| pos as u32 + 1)
+            .unwrap_or(0);
+        mic_row.set_selected(selected);
+        mic_row.connect_selected_notify({
+            let sender = sender.clone();
+            move |row| {
+                let index = row.selected();
+                let device = if index == 0 {
+                    None
+                } else {
+                    mics.get(index as usize - 1).map(|m| m.device_name.clone())
+                };
+                sender.input(Input::SetMicrophone(device));
+            }
+        });
+        vgroup.add(&mic_row);
+
+        vpage.add(&vgroup);
+        dialog.add(&vpage);
+
         // "Botão físico" page (§6.10): live transport status plus the
         // long-press threshold that maps to `ButtonTracker`.
         let bpage = adw::PreferencesPage::new();
@@ -3108,6 +3313,16 @@ pub(crate) mod tests {
         assert_eq!(
             shortcut_action(Key::comma, ModifierType::CONTROL_MASK),
             Some("win.preferences")
+        );
+        // M10.5: Shift+R toggles microphone recording; bare R still
+        // starts/stops the recording itself.
+        assert_eq!(
+            shortcut_action(Key::R, ModifierType::SHIFT_MASK),
+            Some("win.toggle-mic")
+        );
+        assert_eq!(
+            shortcut_action(Key::r, ModifierType::empty()),
+            Some("win.record")
         );
         // Not shortcuts: bare Ctrl+letter combos other than the two
         // defined, Alt-modified keys, unbound letters.

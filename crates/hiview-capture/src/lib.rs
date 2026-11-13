@@ -4,6 +4,7 @@
 //! Video capture hardware layer for HiView: camera discovery (udev/V4L2),
 //! hotplug monitoring and GStreamer pipelines delivering frames to the UI.
 
+mod delayed_bin;
 mod device;
 mod error;
 mod events;
@@ -18,8 +19,8 @@ pub use events::{CameraEvent, CameraState};
 pub use frame::{Frame, FrameBus, FrameSubscription, PixelFormat};
 pub use pipeline::{CapturePipeline, CaptureSource};
 pub use recorder::{
-    MIN_FREE_BYTES, RecordDenied, RecordStop, Recorder, VideoEncoder, available_encoder,
-    check_disk_space,
+    AudioDevice, AudioSource, ClockRef, MIN_FREE_BYTES, RecordDenied, RecordEvent, RecordStop,
+    Recorder, RecorderOptions, VideoEncoder, audio_sources, available_encoder, check_disk_space,
 };
 pub use thumbs::{VideoProbe, probe_video};
 
