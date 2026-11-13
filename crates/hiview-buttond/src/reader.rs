@@ -15,67 +15,90 @@
 //! - The poll timeout is the re-enumeration tick (`TICK`): the unit
 //!   runs in a private network namespace, so kernel uevents never
 //!   reach a udev monitor inside it — periodic sysfs re-enumeration
-//!   is the only reliable hotplug signal.
-//! - Events carry the **device timestamp** from the usbmon header, so
-//!   a PRESSED/RELEASED pair drained in one pass still measures the
-//!   real hold duration downstream.
+//!   is the only reliable hotplug signal, and it runs at most once
+//!   per `TICK` (drains can arrive back-to-back under video traffic).
+//! - Events carry the **kernel capture timestamp** from the usbmon
+//!   header (host monotonic clock), so a PRESSED/RELEASED pair
+//!   drained in one pass still measures the real hold duration.
 
 use std::fs::File;
 use std::os::unix::io::AsFd;
 use std::sync::mpsc::Sender;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use hiview_core::{ButtonEdge, snap_button_event};
 use nix::errno::Errno;
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
 use crate::usbdev::{Target, UsbDev, enumerate, resolve};
-use crate::usbmon_ffi::{UsbmonPacket, fetch_event, record_of};
+use crate::usbmon_ffi::{UsbmonPacket, fetch_event, fetch_stats, record_of, set_ring_size};
 
 /// How often sysfs is re-enumerated: the hotplug signal under
 /// `PrivateNetwork=yes` (udev uevents can't cross netns boundaries).
 /// 1.5 s — the poll still wakes instantly on button data.
 const TICK: Duration = Duration::from_millis(1_500);
 
+/// Ring-health cadence: `MON_IOCG_STATS` reports drops since the
+/// previous call, so a minute between reads bounds warn volume.
+const STATS_TICK: Duration = Duration::from_secs(60);
+
 /// Runs the reader forever: resolves the target, keeps its usbmon bus
-/// open, forwards button edges to `events` and re-enumerates on every
-/// tick so a replugged scope's new devnum is picked up.
+/// open, forwards button edges to `events` and re-enumerates on a
+/// gated tick so a replugged scope's new devnum is picked up.
 pub fn run(events: &Sender<ButtonEdge>) -> ! {
     let mut target: Option<Target> = None;
     let mut open: Option<(u16, File)> = None;
     let mut data = Vec::with_capacity(256);
+    let mut last_enum = Instant::now() - TICK; // enumerate on first pass
+    let mut last_stats = Instant::now();
     loop {
         let Some(t) = target else {
             open = None; // scope gone — the bus fd is worthless to keep
             thread::sleep(TICK);
-            re_enumerate(&mut target, enumerate);
+            re_enumerate(&mut target, &mut last_enum, enumerate);
             continue;
         };
         if open.as_ref().map(|(bus, _)| *bus) != Some(t.busnum) {
             open = open_bus(t.busnum);
             if open.is_none() {
                 thread::sleep(TICK);
-                re_enumerate(&mut target, enumerate);
+                re_enumerate(&mut target, &mut last_enum, enumerate);
                 continue;
             }
         }
         let Some((_, file)) = open.as_ref() else {
             continue;
         };
-        if wait_readable(file, TICK) {
-            drain(file, &mut data, t, events);
+        let broken = wait_readable(file, TICK) && !drain(file, &mut data, t, events);
+        if last_stats.elapsed() >= STATS_TICK {
+            last_stats = Instant::now();
+            check_stats(file);
         }
-        // Timeout or a drained batch: refresh the target — the devnum
-        // may have changed while records flowed.
-        re_enumerate(&mut target, enumerate);
+        if broken {
+            // Dead fd (e.g. device vanished mid-read): drop it and
+            // back off one tick instead of warn-spinning on POLLERR.
+            open = None;
+            thread::sleep(TICK);
+        }
+        re_enumerate(&mut target, &mut last_enum, enumerate);
     }
 }
 
 /// Re-resolves the microscope and logs a target change — the whole
-/// hotplug handling under a private netns. `enumerate` is injected so
-/// the devnum-change contract is testable without sysfs.
-fn re_enumerate(target: &mut Option<Target>, mut enumerate: impl FnMut() -> Vec<UsbDev>) {
+/// hotplug handling under a private netns — at most once per `TICK`
+/// (a sysfs scan per drained batch would be wasted work under video
+/// traffic). `enumerate` is injected so the devnum-change contract is
+/// testable without sysfs.
+fn re_enumerate(
+    target: &mut Option<Target>,
+    last: &mut Instant,
+    mut enumerate: impl FnMut() -> Vec<UsbDev>,
+) {
+    if last.elapsed() < TICK {
+        return;
+    }
+    *last = Instant::now();
     let next = resolve(&enumerate());
     if *target != next {
         match next {
@@ -102,11 +125,18 @@ fn wait_readable(file: &File, timeout: Duration) -> bool {
     }
 }
 
-/// Opens `/dev/usbmon<busnum>` read-only + non-blocking.
+/// Opens `/dev/usbmon<busnum>` read-only + non-blocking, growing the
+/// capture ring first — the default ~300 KiB overflows under live-view
+/// traffic and the kernel then drops events, possibly the button's.
 fn open_bus(busnum: u16) -> Option<(u16, File)> {
     let path = format!("/dev/usbmon{busnum}");
     match File::open(&path) {
         Ok(file) => {
+            if let Err(e) = set_ring_size(file.as_fd()) {
+                // Keep the fd — a small ring still beats no reader,
+                // and the stats watchdog reports the drops.
+                tracing::warn!(path, errno = ?e, "usbmon ring-size request failed");
+            }
             if let Err(e) = set_nonblocking(&file) {
                 tracing::warn!(path, error = %e, "could not set O_NONBLOCK");
                 return None;
@@ -120,9 +150,26 @@ fn open_bus(busnum: u16) -> Option<(u16, File)> {
     }
 }
 
+/// `MON_IOCG_STATS` once per `STATS_TICK`: `dropped` is the count
+/// lost since the previous call, so warn only when it is nonzero.
+fn check_stats(file: &File) {
+    match fetch_stats(file.as_fd()) {
+        Ok(s) if s.dropped > 0 => {
+            tracing::warn!(
+                dropped = s.dropped,
+                "usbmon dropped records — ring under pressure"
+            );
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(errno = ?e, "usbmon stats failed"),
+    }
+}
+
 /// Drains every queued record after a readable poll, forwarding each
-/// Snap edge stamped with its device timestamp.
-fn drain(file: &File, data: &mut Vec<u8>, target: Target, events: &Sender<ButtonEdge>) {
+/// Snap edge stamped with its kernel capture timestamp. Returns
+/// `false` when the fd itself broke — the caller drops it instead of
+/// warn-spinning on a dead descriptor.
+fn drain(file: &File, data: &mut Vec<u8>, target: Target, events: &Sender<ButtonEdge>) -> bool {
     loop {
         match fetch_event(file.as_fd(), data) {
             Ok(packet) => {
@@ -130,17 +177,17 @@ fn drain(file: &File, data: &mut Vec<u8>, target: Target, events: &Sender<Button
                     && events.send(edge).is_err()
                 {
                     // Publisher gone — the daemon has no purpose left;
-                    // exit so systemd's restart policy decides.
-                    std::process::exit(0);
+                    // nonzero exit so Restart=on-failure engages.
+                    std::process::exit(1);
                 }
             }
             // No more records right now — the fd is non-blocking
             // (EWOULDBLOCK == EAGAIN on Linux).
-            Err(Errno::EAGAIN) => break,
+            Err(Errno::EAGAIN) => return true,
             Err(Errno::EINTR) => continue,
             Err(e) => {
-                tracing::warn!(errno = ?e, "usbmon read failed; reopening");
-                break;
+                tracing::warn!(errno = ?e, "usbmon read failed — dropping fd until next tick");
+                return false;
             }
         }
     }
@@ -156,8 +203,8 @@ fn set_nonblocking(file: &File) -> nix::Result<()> {
 
 /// Header+payload → a [`ButtonEdge`] iff the record is the Snap
 /// button on `target` (the single place raw USB bytes cross into the
-/// app's vocabulary). The edge carries the DEVICE timestamp — press
-/// durations downstream never depend on delivery latency.
+/// app's vocabulary). The edge carries the KERNEL capture timestamp —
+/// press durations downstream never depend on delivery latency.
 fn event_from_packet(packet: &UsbmonPacket, data: &[u8], target: Target) -> Option<ButtonEdge> {
     snap_button_event(&record_of(packet, data), target.busnum, target.devnum).map(|event| {
         ButtonEdge {
@@ -223,7 +270,7 @@ mod tests {
             edge.map(|e| (e.event, e.ts_us)),
             Some((hiview_core::ButtonEvent::Released, 13_045_678))
         );
-        // The hold duration is a device-clock delta — a PRESSED drained
+        // The hold duration is a kernel-clock delta — a PRESSED drained
         // in the same pass still measures the real ~700 ms.
     }
 
@@ -252,6 +299,20 @@ mod tests {
         assert_eq!(event_from_packet(&p, &[0x02, 0x01], target()), None);
     }
 
+    /// Truncation path: the kernel copies `min(len_cap, alloc)` bytes
+    /// but reports the ORIGINAL len_cap — a video record truncated at
+    /// the scratch buffer must yield no event and no error.
+    #[test]
+    fn truncated_record_is_silent() {
+        let p = packet(3, 7, 3072, 1);
+        let clipped = [0x02u8, 0x01, 0x00, 0x01];
+        assert_eq!(
+            event_from_packet(&p, &clipped, target()),
+            None,
+            "len_cap != 4 rejects truncated records"
+        );
+    }
+
     /// Replug contract under `PrivateNetwork=yes`: the periodic
     /// re-enumeration tick must pick up the new devnum — this is the
     /// mechanism that replaces the udev monitor.
@@ -261,8 +322,9 @@ mod tests {
             busnum: 3,
             devnum: 7,
         });
+        let mut last = Instant::now() - TICK;
         // Plugged out then back in: same bus, new devnum.
-        re_enumerate(&mut target, || vec![scope(3, 12)]);
+        re_enumerate(&mut target, &mut last, || vec![scope(3, 12)]);
         assert_eq!(
             target,
             Some(Target {
@@ -278,9 +340,13 @@ mod tests {
             busnum: 3,
             devnum: 7,
         });
-        re_enumerate(&mut target, Vec::new);
+        let mut last = Instant::now() - TICK;
+        re_enumerate(&mut target, &mut last, Vec::new);
         assert_eq!(target, None, "unplug must clear the target");
-        re_enumerate(&mut target, || vec![scope(3, 15)]);
+        // A second call inside the same tick is gated — rewind the
+        // clock to simulate the next tick.
+        last = Instant::now() - TICK;
+        re_enumerate(&mut target, &mut last, || vec![scope(3, 15)]);
         assert_eq!(target.map(|t| t.devnum), Some(15));
     }
 
@@ -290,12 +356,38 @@ mod tests {
             busnum: 3,
             devnum: 7,
         });
+        let mut last = Instant::now() - TICK;
         let mut calls = 0u32;
-        re_enumerate(&mut target, || {
+        re_enumerate(&mut target, &mut last, || {
             calls += 1;
             vec![scope(3, 7)]
         });
         assert_eq!(target.unwrap_or_else(|| panic!("gone")).devnum, 7);
         assert_eq!(calls, 1, "enumerates exactly once per tick");
+    }
+
+    /// Back-to-back calls within a tick must NOT re-scan sysfs —
+    /// drains arrive constantly under live-view traffic.
+    #[test]
+    fn re_enumerate_is_gated_to_one_per_tick() {
+        let mut target = Some(Target {
+            busnum: 3,
+            devnum: 7,
+        });
+        let mut last = Instant::now() - TICK;
+        let mut calls = 0u32;
+        let count = |calls: &mut u32| {
+            *calls += 1;
+            vec![scope(3, 9)]
+        };
+        re_enumerate(&mut target, &mut last, || count(&mut calls));
+        // Second call inside TICK: gated — target untouched.
+        re_enumerate(&mut target, &mut last, || count(&mut calls));
+        assert_eq!(calls, 1);
+        assert_eq!(
+            target.unwrap_or_else(|| panic!("gone")).devnum,
+            9,
+            "the first call resolved; the second never ran"
+        );
     }
 }

@@ -22,8 +22,8 @@ pub enum ButtonEvent {
     Released,
 }
 
-/// A [`ButtonEvent`] stamped by the device-side clock (µs,
-/// `CLOCK_MONOTONIC` — the same domain as `glib::monotonic_time`, the
+/// A [`ButtonEvent`] stamped by the kernel's monotonic host clock at
+/// capture time (µs — the same domain as `glib::monotonic_time`, the
 /// usbmon header and evdev timestamps). Press durations must be
 /// computed from `ts_us`, never from arrival time: delivery batching
 /// and reconnects must not distort the measurement.
@@ -31,7 +31,7 @@ pub enum ButtonEvent {
 pub struct ButtonEdge {
     /// Which edge happened.
     pub event: ButtonEvent,
-    /// Device/kernel timestamp, microseconds (monotonic).
+    /// Kernel capture timestamp, microseconds (host monotonic clock).
     pub ts_us: u64,
 }
 
@@ -84,14 +84,19 @@ pub struct UsbmonRecord<'a> {
     pub len_cap: u32,
     /// The captured payload (`len_cap` bytes at most).
     pub data: &'a [u8],
-    /// Event timestamp from the header, microseconds (monotonic) —
-    /// `ts_sec * 1_000_000 + ts_usec` computed by the caller.
+    /// Event timestamp from the header — the kernel's monotonic host
+    /// clock at capture, `ts_sec * 1_000_000 + ts_usec` by the caller.
     pub ts_us: i64,
 }
 
 /// The §6.10 filter: a completion record on the microscope's interrupt
-/// endpoint `0x83`, on the bus/device being tracked, carrying the
-/// 4-byte UVC button status packet.
+/// endpoint `0x83`, on the bus/device being tracked, carrying exactly
+/// the 4-byte UVC button status packet.
+///
+/// `len_cap` must equal 4: a larger value is another UVC status
+/// message or a payload the reader truncated (the kernel caps copies
+/// at `alloc` but reports the original `len_cap`), and a smaller one
+/// is a malformed record.
 ///
 /// Returns the decoded edge or `None`. Everything else — other devices,
 /// other endpoints, submissions, malformed payloads — is discarded.
@@ -102,7 +107,7 @@ pub fn snap_button_event(rec: &UsbmonRecord<'_>, busnum: u16, devnum: u8) -> Opt
         || rec.epnum != SNAP_EPNUM
         || rec.busnum != busnum
         || rec.devnum != devnum
-        || rec.len_cap < 4
+        || rec.len_cap != 4
     {
         return None;
     }
@@ -340,6 +345,14 @@ mod tests {
         let mut r = rec(&[0x02, 0x01, 0x00, 0x01]);
         r.len_cap = 3;
         assert_eq!(snap_button_event(&r, BUS, DEV), None);
+        // len_cap > 4: another UVC status message — or a video record
+        // the reader truncated (kernel caps the copy at `alloc` but
+        // reports the original len_cap). Both must be dropped.
+        for len_cap in [5u32, 3072] {
+            let mut r = rec(&[0x02, 0x01, 0x00, 0x01]);
+            r.len_cap = len_cap;
+            assert_eq!(snap_button_event(&r, BUS, DEV), None);
+        }
     }
 
     /// Short press → photo (§6.10).

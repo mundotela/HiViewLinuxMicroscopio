@@ -2,9 +2,12 @@
 // Copyright (C) 2026 MundoTela Tecnologia
 #![forbid(unsafe_code)]
 
-//! Resolving the microscope's bus/devnum via udev (ARCHITECTURE §2.1).
-//! The matching logic is pure — the udev glue is thin and isolated so
-//! the hotplug rules can be tested with fake device lists.
+//! Resolving the microscope's bus/devnum via read-only sysfs
+//! enumeration through udev (ARCHITECTURE §2.1). The matching logic is
+//! pure — the udev glue is thin and isolated so the replug rules can
+//! be tested with fake device lists. There is NO hotplug monitor:
+//! `PrivateNetwork=yes` hides kernel uevents, so `reader` calls
+//! [`enumerate`] on a timer tick instead.
 
 /// The microscope USB descriptor (ARCHITECTURE §2.1 / §6.1).
 pub const MICROSCOPE_VID: u16 = 0x05e3;

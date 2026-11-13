@@ -52,8 +52,6 @@ require_binary() {
     fi
 }
 
-CALLER="$SUDO_USER"
-
 install_files() {
     say "Instalando binário em $BIN_DST…"
     install -D -m 0755 "$ROOT/$BIN_SRC" "$BIN_DST"
@@ -141,6 +139,7 @@ uninstall() {
 case "${1:-install}" in
     install)
         require_invocation "$@"
+        CALLER="$SUDO_USER" # guaranteed non-root by require_invocation
         require_binary
         install_files
         setup_group
@@ -150,6 +149,7 @@ case "${1:-install}" in
         ;;
     --uninstall | uninstall)
         require_invocation "$@"
+        CALLER="$SUDO_USER" # guaranteed non-root by require_invocation
         uninstall
         ;;
     *)

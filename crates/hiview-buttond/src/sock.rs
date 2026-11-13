@@ -5,8 +5,9 @@
 //! Unix-socket publisher: `/run/hiview/button.sock`, mode 0660, group
 //! `hiview`. The ONLY bytes ever written are `"PRESSED <ts_us>\n"` and
 //! `"RELEASED <ts_us>\n"` — the daemon's privacy contract (no USB
-//! payload ever leaves this process). The `ts_us` is the device clock
-//! from the usbmon header so press durations survive delivery batching.
+//! payload ever leaves this process). The `ts_us` is the kernel's
+//! monotonic host clock at capture so press durations survive delivery
+//! batching.
 
 use std::fs;
 use std::io::Write;
@@ -30,6 +31,11 @@ pub fn wire_line(edge: &ButtonEdge) -> String {
     };
     format!("{tag} {}\n", edge.ts_us)
 }
+
+/// Upper bound on simultaneous clients: the socket is a local
+/// broadcast channel — extra peers are refused so a runaway can't
+/// grow the client list (or its write cost) unboundedly.
+const MAX_CLIENTS: usize = 8;
 
 /// Binds `path` (removing a stale socket), sets 0660 + group, accepts
 /// clients, and broadcasts every [`ButtonEdge`] from `rx` to all of
@@ -71,6 +77,11 @@ pub fn serve(path: &Path, group: Option<&str>, rx: &Receiver<ButtonEdge>) -> any
     let mut clients: Vec<UnixStream> = Vec::new();
     loop {
         while let Ok(client) = cr.try_recv() {
+            if clients.len() >= MAX_CLIENTS {
+                // Dropped here → the peer sees a closed socket.
+                tracing::warn!("button socket full — refusing a client");
+                continue;
+            }
             clients.push(client);
         }
         match rx.recv_timeout(Duration::from_millis(200)) {
@@ -84,17 +95,17 @@ pub fn serve(path: &Path, group: Option<&str>, rx: &Receiver<ButtonEdge>) -> any
 }
 
 /// Writes `line` to every client, dropping those that fail — a dead
-/// app must never stall the daemon. `WouldBlock` (reader stalled,
-/// buffer full) keeps the client but skips the event: a stalled GUI
-/// missing an edge is safer than the daemon buffering unboundedly.
+/// app must never stall the daemon. ANY error drops the client:
+/// `write_all` on a non-blocking socket may have written a partial
+/// line before `WouldBlock`, and a torn line can never resync the
+/// tag/ts protocol — better closed than desynchronized.
 fn broadcast(clients: &mut Vec<UnixStream>, line: &[u8]) {
     clients.retain_mut(|c| match c.write_all(line) {
         Ok(()) => true,
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-            tracing::warn!("client stalled — dropping one button event");
-            true
+        Err(e) => {
+            tracing::warn!(error = %e, "button socket client dropped");
+            false
         }
-        Err(_) => false,
     });
 }
 
@@ -182,7 +193,7 @@ mod tests {
         assert_eq!(
             read_until(&mut s, b"PRESSED 12345678\n"),
             b"PRESSED 12345678\n",
-            "the wire line is TAG <device ts_us>"
+            "the wire line is TAG <capture ts_us>"
         );
     }
 
@@ -226,5 +237,24 @@ mod tests {
             read_until(&mut live, b"RELEASED 2\n"),
             b"PRESSED 1\nRELEASED 2\n"
         );
+    }
+
+    /// Clients beyond `MAX_CLIENTS` are refused, not queued: the peer
+    /// must see a closed socket while the first eight still receive.
+    #[test]
+    fn a_ninth_client_is_refused() {
+        let (tx, _dir, sock) = spawn_server();
+        let mut first: Vec<UnixStream> = (0..8).map(|_| connect(&sock)).collect();
+        let mut ninth = connect(&sock); // refused at registration
+        tx.send(edge(ButtonEvent::Pressed, 1))
+            .unwrap_or_else(|e| panic!("{e}"));
+        for s in &mut first {
+            assert_eq!(read_until(s, b"PRESSED 1\n"), b"PRESSED 1\n");
+        }
+        let mut buf = [0u8; 16];
+        match ninth.read(&mut buf) {
+            Ok(0) => {}
+            other => panic!("the ninth client should see EOF, got {other:?}"),
+        }
     }
 }
