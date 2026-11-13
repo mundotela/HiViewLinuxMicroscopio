@@ -20,3 +20,51 @@ tracing-subscriber = { workspace = true, features = ["fmt"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# Debian package (cargo-deb, M11). Optional root helper for the
+# microscope's physical Snap button (docs/ARCHITECTURE.md §6.10).
+# The maintainer scripts and systemd/sysusers sources live in
+# ./debian/ — they run as ROOT and are reviewed per CONVENTIONS §11.1.
+[package.metadata.deb]
+name = "hiview-buttond"
+maintainer = "MundoTela Tecnologia"
+copyright = "2026, MundoTela Tecnologia"
+license-file = ["../../LICENSE", "0"]
+section = "utils"
+priority = "optional"
+# $auto covers libc/libudev. The unit is enabled and started by the
+# generated postinst fragment (systemd-units below).
+depends = "$auto"
+maintainer-scripts = "debian/"
+extended-description = """
+ Optional root helper for the HiView USB microscope's physical Snap
+ button. It reads the button's UVC interrupt packets via the kernel
+ usbmon interface and publishes PRESSED/RELEASED lines on a group-
+ readable unix socket (/run/hiview/button.sock), so the app sees
+ button events without root. Hardened systemd unit: no capabilities,
+ private network, strict filesystem.
+"""
+assets = [
+    [
+        "target/release/hiview-buttond",
+        "usr/libexec/hiview-buttond",
+        "755",
+    ],
+    [
+        "../../data/modules-load.d/hiview.conf",
+        "usr/lib/modules-load.d/hiview.conf",
+        "644",
+    ],
+    [
+        "../../data/sysusers.d/hiview.conf",
+        "usr/lib/sysusers.d/hiview.conf",
+        "644",
+    ],
+]
+
+# Generated postinst fragments: daemon-reload + enable + start. The
+# unit itself comes from ./debian/hiview-buttond.service.
+[package.metadata.deb.systemd-units]
+unit-name = "hiview-buttond"
+enable = true
+start = true

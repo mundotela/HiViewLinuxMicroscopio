@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>br.com.mundotela.HiView</id>
+  <name>HiView</name>
+  <summary>Veja, fotografe, filme e meça com o seu microscópio USB</summary>
+  <developer id="br.com.mundotela">
+    <name>MundoTela Tecnologia</name>
+  </developer>
+  <project_license>GPL-3.0-or-later</project_license>
+  <metadata_license>CC0-1.0</metadata_license>
+  <launchable type="desktop-id">br.com.mundotela.HiView.desktop</launchable>
+  <description>
+    <p>
+      O HiView transforma um microscópio USB comum numa estação de
+      trabalho: imagem ao vivo em tela cheia, fotos com redução de
+      ruído, gravação de vídeo com ou sem áudio do microfone e uma
+      galeria integrada para revisar tudo depois.
+    </p>
+    <p>
+      No modo Bancada, o HiView mede em milímetros de verdade depois de
+      uma calibração simples: régua, ângulo e círculo sobre a imagem,
+      com grade e mira ajustáveis — ideal para inspeção de placas e
+      solda. Também há ajustes de imagem por dispositivo e atalhos de
+      teclado para todas as funções, incluindo o botão físico do
+      microscópio (com o serviço opcional hiview-buttond).
+    </p>
+  </description>
+  <url type="homepage">https://mundotela.com.br</url>
+  <branding>
+    <color type="primary" scheme_preference="light">#3cc9b0</color>
+    <color type="primary" scheme_preference="dark">#178f7d</color>
+  </branding>
+  <releases>
+    <release version="1.0.0" date="2026-11-13">
+      <description>
+        <p>Primeira versão estável: visualização ao vivo, fotos com
+        redução de ruído, vídeo com áudio opcional, galeria, medição
+        calibrada, botão físico, tour de boas-vindas e janela de
+        atalhos.</p>
+      </description>
+    </release>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

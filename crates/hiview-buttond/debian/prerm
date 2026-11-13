@@ -1,0 +1,7 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# prerm for hiview-buttond: stop + disable come from the generated
+# dh_installsystemd fragment at the token below.
+set -e
+
+#DEBHELPER#

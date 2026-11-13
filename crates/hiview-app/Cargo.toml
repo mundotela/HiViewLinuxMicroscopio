@@ -25,3 +25,62 @@ signal-hook.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# Debian package (cargo-deb, M11). Plugin set: PASSO 0 map in
+# docs/reports/M11.md — every element the production pipelines use.
+[package.metadata.deb]
+name = "hiview"
+maintainer = "MundoTela Tecnologia"
+copyright = "2026, MundoTela Tecnologia"
+license-file = ["../../LICENSE", "0"]
+section = "science"
+priority = "optional"
+# $auto (shlibs) covers GTK/adwaita/GStreamer libs. Plugins:
+# - plugins-base: videoconvert, audioconvert/resample, opusenc/dec,
+#   appsrc/appsink (capture + record + audio branches)
+# - plugins-good: v4l2src (the camera), videoflip, mp4mux, qtdemux,
+#   pulsesrc (microphone), level (record meter)
+# - plugins-bad: h264parse (REQUIRED by mp4mux — records break without
+#   it) and openh264enc/dec (encoder fallback + gallery thumbnails)
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad"
+# x264enc is the preferred encoder (better quality/compression than
+# the openh264enc fallback) but the recorder works without it.
+recommends = "gstreamer1.0-plugins-ugly"
+extended-description = """
+ HiView turns a USB microscope into a workstation: live view, noise-
+ reduced photos, video recording with optional microphone audio, an
+ integrated gallery, calibrated millimetre measurements and support
+ for the microscope's physical Snap button (optional daemon).
+"""
+assets = [
+    [
+        "target/release/hiview-app",
+        "usr/bin/hiview",
+        "755",
+    ],
+    [
+        "../../data/br.com.mundotela.HiView.desktop",
+        "usr/share/applications/br.com.mundotela.HiView.desktop",
+        "644",
+    ],
+    [
+        "../../data/icons/br.com.mundotela.HiView.svg",
+        "usr/share/icons/hicolor/scalable/apps/br.com.mundotela.HiView.svg",
+        "644",
+    ],
+    [
+        "../../data/icons/br.com.mundotela.HiView-symbolic.svg",
+        "usr/share/icons/hicolor/symbolic/apps/br.com.mundotela.HiView-symbolic.svg",
+        "644",
+    ],
+    [
+        "../../data/br.com.mundotela.HiView.metainfo.xml",
+        "usr/share/metainfo/br.com.mundotela.HiView.metainfo.xml",
+        "644",
+    ],
+    [
+        "../../README.md",
+        "usr/share/doc/hiview/README.md",
+        "644",
+    ],
+]

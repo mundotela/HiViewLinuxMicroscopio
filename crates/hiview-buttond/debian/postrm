@@ -1,0 +1,11 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# postrm for hiview-buttond. Users are NEVER removed from the group —
+# only the group itself, and only on purge.
+set -e
+
+#DEBHELPER#
+
+if [ "${1:-}" = "purge" ]; then
+    groupdel hiview 2>/dev/null || true
+fi
