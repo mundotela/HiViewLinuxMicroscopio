@@ -208,6 +208,14 @@ impl CameraService {
         self.pipeline.as_ref().map(|p| adjust_key_for(p.source()))
     }
 
+    /// The capture pipeline's clock reference for A/V sync (M10.5):
+    /// the recorder shares this clock and translates video PTS into its
+    /// own running time. `None` while no pipeline runs.
+    #[must_use]
+    pub fn clock_ref(&self) -> Option<hiview_capture::ClockRef> {
+        self.pipeline.as_ref().and_then(|p| p.clock_ref())
+    }
+
     /// Applies a camera event arriving from the monitor or bus threads.
     pub fn on_event(&mut self, event: CameraEvent) {
         debug!("camera event: {event:?}");

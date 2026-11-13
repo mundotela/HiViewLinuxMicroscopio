@@ -32,6 +32,9 @@ pub enum StopReason {
     Disconnected,
     /// The record pipeline reported a fatal error.
     Failed,
+    /// The microphone died mid-recording (M10.5 — the file is
+    /// finalized with both tracks).
+    AudioLost,
     /// The window is closing; quit follows the finalize.
     Close,
 }

@@ -150,6 +150,29 @@ pub const REC_LOW_DISK: &str = "Espaço em disco insuficiente para gravar (míni
 /// Toast shown when no H.264 encoder is installed at all.
 pub const REC_UNSUPPORTED: &str = "Gravação indisponível: codificador H.264 não encontrado";
 
+/// Preferences page for recording settings (M10.5).
+pub const PREFS_VIDEO_PAGE: &str = "Vídeo";
+
+/// Switch row enabling microphone recording (M10.5).
+pub const PREFS_RECORD_AUDIO_LABEL: &str = "Gravar áudio do microfone";
+
+/// Combo row picking which microphone to record (M10.5).
+pub const PREFS_MIC_LABEL: &str = "Microfone";
+
+/// First entry of the microphone combo — the OS default input.
+pub const MIC_DEFAULT_LABEL: &str = "Padrão do sistema";
+
+/// Toolbar microphone toggle tooltip (M10.5, `Shift+R`).
+pub const MIC_TOGGLE_TOOLTIP: &str = "Gravar áudio do microfone (Shift+R)";
+
+/// Toast when the mic cannot be opened at record start — the video is
+/// still recorded, just silent (M10.5: recording never blocks on audio).
+pub const MIC_UNAVAILABLE: &str = "Microfone indisponível: gravando sem áudio";
+
+/// Toast when the mic dies mid-recording; the file is finalized with
+/// both tracks (M10.5 minimum-accepted behavior).
+pub const MIC_LOST: &str = "Microfone desconectado: gravação finalizada";
+
 /// Header button that opens the gallery (`Ctrl+G`).
 pub const GALLERY_BUTTON_LABEL: &str = "Galeria";
 
