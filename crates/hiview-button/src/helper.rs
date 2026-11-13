@@ -4,8 +4,12 @@
 //! [`HelperSource`]: client of the `hiview-buttond` Unix socket.
 //!
 //! The daemon publishes only `PRESSED <ts_us>\n` / `RELEASED <ts_us>\n`
-//! lines (docs/ARCHITECTURE.md §6.10): the device clock in µs, so the
-//! press duration survives delivery batching. The source reconnects
+//! lines (docs/ARCHITECTURE.md §6.10): `ts_us` is the kernel's
+//! REALTIME clock at capture (`mon_bin.c` uses
+//! `ktime_get_real_ts64`), so the press duration survives delivery
+//! batching — but it must only be subtracted from other daemon
+//! timestamps, never compared to the app's monotonic clock.
+//! The source reconnects
 //! automatically: if the daemon restarts — or is installed while the
 //! app is already running — the button starts working without
 //! touching the app.

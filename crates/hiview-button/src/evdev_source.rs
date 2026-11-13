@@ -139,7 +139,9 @@ fn read_events(mut device: evdev::Device, tx: &Sender<SourceUpdate>) -> bool {
                 _ => continue,
             };
             // The kernel stamps input events on CLOCK_MONOTONIC — the
-            // same domain as the usbmon header and glib::monotonic_time.
+            // same domain as glib::monotonic_time, but NOT the same as
+            // the daemon's usbmon timestamps (those are CLOCK_REALTIME).
+            // Only same-source deltas are meaningful.
             let ts_us = event
                 .timestamp()
                 .duration_since(std::time::UNIX_EPOCH)

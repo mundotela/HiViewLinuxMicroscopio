@@ -330,8 +330,13 @@ pub enum Input {
     /// A Snap-button transport update: an edge or a connectivity
     /// change (§6.10).
     ButtonUpdate(SourceUpdate),
-    /// The long-press deadline timer fired while the button is held.
-    ButtonLongDeadline,
+    /// The long-press timer fired while the button is held. Carries
+    /// the EDGE-domain deadline captured at press time — the timer
+    /// runs on the arrival clock but `fire_long` must be fed a
+    /// timestamp in the same domain as `pressed_at` (usbmon stamps
+    /// CLOCK_REALTIME, evdev CLOCK_MONOTONIC; never comparable to
+    /// `glib::monotonic_time`).
+    ButtonLongDeadline(u64),
     /// Preferences "Toque longo (ms)" spin value changed.
     SetButtonLongPress(f64),
 }
@@ -1560,16 +1565,21 @@ impl SimpleComponent for AppModel {
                 SourceUpdate::State(kind, SourceState::Connected) => {
                     self.button_status = Some(kind);
                     self.sync_button_status_row();
+                    self.show_toast(adw::Toast::new(&strings::button_connected_toast(kind)));
                 }
                 SourceUpdate::State(_, SourceState::Disconnected) => {
                     self.button_status = None;
                     self.button_tracker.reset();
                     self.sync_button_status_row();
+                    self.show_toast(adw::Toast::new(strings::BUTTON_DISCONNECTED_TOAST));
                 }
                 SourceUpdate::Event(edge) => self.on_button_edge(edge, &sender),
             },
-            Input::ButtonLongDeadline => {
-                if self.button_tracker.fire_long(now_ms()) {
+            Input::ButtonLongDeadline(deadline) => {
+                // `deadline` is in the edge's kernel clock domain — the
+                // stale-timer case is safe: a newer press re-bases
+                // `pressed_at`, so an old deadline never fires early.
+                if self.button_tracker.fire_long(deadline) {
                     self.toggle_record(&sender);
                 }
             }
@@ -1662,21 +1672,27 @@ impl AppModel {
     }
 
     /// A Snap edge arrived — interpret it via the tracker (§6:10).
-    /// Timestamps come from the DEVICE clock (`edge.ts_ms`): a
-    /// PRESSED/RELEASED pair delivered in the same batch still measures
-    /// the real hold duration.
+    /// `edge.ts_ms` is the kernel's capture clock — CLOCK_REALTIME for
+    /// the usbmon daemon, CLOCK_MONOTONIC for evdev — so a
+    /// PRESSED/RELEASED pair delivered in the same batch still
+    /// measures the real hold duration (same-domain delta). The
+    /// long-press timer, however, is scheduled by ARRIVAL time:
+    /// `edge.ts` and `glib::monotonic_time` are different domains and
+    /// must never be subtracted.
     fn on_button_edge(&mut self, edge: ButtonEdge, sender: &ComponentSender<Self>) {
         match edge.event {
             ButtonEvent::Pressed => {
                 if self.button_tracker.press(edge.ts_ms()) == PressOutcome::Accepted
                     && let Some(deadline) = self.button_tracker.long_deadline()
                 {
-                    // `deadline` and `now_ms()` are the same monotonic
-                    // clock domain as the device timestamp.
-                    let wait = deadline.saturating_sub(now_ms()).max(1);
+                    // Arrival-clock scheduling: the timeout fires
+                    // `long_press_ms` after the edge reached the app.
+                    // `deadline` rides along so `fire_long` can
+                    // re-check the hold in the edge's own domain.
+                    let wait = Duration::from_millis(self.config.button.long_press_ms.max(1));
                     let sender = sender.clone();
-                    glib::timeout_add_local_once(Duration::from_millis(wait), move || {
-                        sender.input(Input::ButtonLongDeadline);
+                    glib::timeout_add_local_once(wait, move || {
+                        sender.input(Input::ButtonLongDeadline(deadline));
                     });
                 }
             }
@@ -2721,12 +2737,6 @@ impl AppModel {
         crate::focus::watch_dialog(dialog.upcast_ref::<adw::Dialog>(), &self.viewport);
         dialog.present(Some(&self.window));
     }
-}
-
-/// Monotonic milliseconds for [`ButtonTracker`] — `glib::monotonic_time`
-/// is µs since boot, immune to wall-clock adjustments.
-fn now_ms() -> u64 {
-    u64::try_from(glib::monotonic_time().max(0)).unwrap_or_default() / 1000
 }
 
 /// Logs the visible widget tree (window → content → …) at debug level.

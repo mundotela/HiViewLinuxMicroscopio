@@ -22,16 +22,20 @@ pub enum ButtonEvent {
     Released,
 }
 
-/// A [`ButtonEvent`] stamped by the kernel's monotonic host clock at
-/// capture time (µs — the same domain as `glib::monotonic_time`, the
-/// usbmon header and evdev timestamps). Press durations must be
-/// computed from `ts_us`, never from arrival time: delivery batching
-/// and reconnects must not distort the measurement.
+/// A [`ButtonEvent`] stamped by the kernel's capture clock (µs).
+/// NOTE the domain is per-source: the usbmon daemon stamps
+/// CLOCK_REALTIME (`ktime_get_real_ts64` in `mon_bin_event`) while
+/// evdev stamps CLOCK_MONOTONIC. `ts_us` is therefore valid ONLY for
+/// deltas between edges of the same source — it must never be
+/// compared to `glib::monotonic_time`/`Instant`. Press durations
+/// still come from `ts_us` (not arrival time) so delivery batching
+/// and reconnects do not distort the measurement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ButtonEdge {
     /// Which edge happened.
     pub event: ButtonEvent,
-    /// Kernel capture timestamp, microseconds (host monotonic clock).
+    /// Kernel capture timestamp, microseconds (clock domain depends
+    /// on the source — see the struct note).
     pub ts_us: u64,
 }
 
@@ -84,8 +88,9 @@ pub struct UsbmonRecord<'a> {
     pub len_cap: u32,
     /// The captured payload (`len_cap` bytes at most).
     pub data: &'a [u8],
-    /// Event timestamp from the header — the kernel's monotonic host
-    /// clock at capture, `ts_sec * 1_000_000 + ts_usec` by the caller.
+    /// Event timestamp from the header — the kernel's REALTIME clock
+    /// at capture (`ktime_get_real_ts64`),
+    /// `ts_sec * 1_000_000 + ts_usec` computed by the caller.
     pub ts_us: i64,
 }
 
@@ -428,5 +433,48 @@ mod tests {
         assert_eq!(t.long_deadline(), Some(1_700));
         t.release(1_200);
         assert_eq!(t.long_deadline(), None);
+    }
+
+    /// CLOCK_REALTIME press (usbmon daemon path): a ts ~1.76e15 µs —
+    /// epoch scale, not boot scale — must not overflow the tracker,
+    /// and firing at the edge-domain deadline still reports long.
+    /// The app schedules the timer by arrival clock and feeds the
+    /// deadline back, which is what this simulates.
+    #[test]
+    fn realtime_press_fires_at_edge_domain_deadline() {
+        let mut t = ButtonTracker::new(50, 700);
+        let press_ts_ms = 1_760_000_000_000_u64; // ~1.76e15 µs
+        assert_eq!(t.press(press_ts_ms), PressOutcome::Accepted);
+        let deadline = t.long_deadline().unwrap_or_else(|| panic!("held"));
+        assert_eq!(deadline, press_ts_ms + 700);
+        assert!(t.fire_long(deadline), "deadline-domain fire_long must fire");
+    }
+
+    /// A stale timer from press A must not fire press B early: B's
+    /// `pressed_at` re-bases the check, so firing at A's deadline is
+    /// correctly below B's threshold.
+    #[test]
+    fn stale_deadline_cannot_fire_a_new_press_early() {
+        let mut t = ButtonTracker::new(50, 700);
+        t.press(1_000);
+        let deadline_a = t.long_deadline().unwrap_or_else(|| panic!("held")); // 1700
+        assert_eq!(t.release(1_100), ReleaseOutcome::Short);
+        t.press(1_400); // press B starts
+        assert!(
+            !t.fire_long(deadline_a),
+            "A's deadline fires only 300 ms into B's hold — must not fire"
+        );
+        assert!(t.fire_long(2_100), "B crosses its own deadline at 2100");
+    }
+
+    /// Short press then the pending timer fires: nothing held, so the
+    /// late deadline is a no-op — the photo was already taken.
+    #[test]
+    fn deadline_after_short_release_is_a_noop() {
+        let mut t = ButtonTracker::new(50, 700);
+        t.press(1_000);
+        let deadline = t.long_deadline().unwrap_or_else(|| panic!("held"));
+        assert_eq!(t.release(1_100), ReleaseOutcome::Short);
+        assert!(!t.fire_long(deadline), "nothing held — timer is inert");
     }
 }

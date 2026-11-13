@@ -65,7 +65,7 @@ cargo build --release -p hiview-buttond
 sudo ./scripts/install-buttond.sh
 ```
 
-O instalador compila o daemon, cria o grupo `hiview`, adiciona o seu usuário a ele e ativa o serviço. Para desinstalar: `sudo ./scripts/install-buttond.sh --uninstall`.
+O instalador exige o binário já compilado (o `cargo build` acima), cria o grupo `hiview`, adiciona o seu usuário a ele e ativa o serviço. Para desinstalar: `sudo ./scripts/install-buttond.sh --uninstall`.
 
 **Depois de instalar, saia da sessão e entre novamente** (logout/login). Isso é necessário para liberar o acesso ao botão.
 
@@ -213,7 +213,7 @@ Com o componente opcional instalado (seção 3.2):
 | Clique curto | Tira foto |
 | Segurar ~1 segundo | Inicia/para a gravação |
 
-Você pode mudar o tempo do clique longo em Preferências → **Botão físico** (padrão: 700 ms). A mesma página mostra o status do botão: **"Conectado via evdev"** (leitura direta do kernel), **"Conectado via serviço"** (daemon `hiview-buttond`) ou **"Não disponível"**.
+Você pode mudar o tempo do clique longo em Preferências → **Botão físico** (padrão: 700 ms). A mesma página mostra o status do botão: **"Conectado via driver"** (leitura direta do kernel), **"Conectado via serviço"** (daemon `hiview-buttond`) ou **"Não disponível"**. Um aviso (toast) também aparece na janela quando o botão conecta ou desconecta.
 
 > O botão só funciona com o HiView aberto e com o microscópio transmitindo imagem.
 

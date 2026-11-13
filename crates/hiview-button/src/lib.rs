@@ -53,8 +53,10 @@ pub enum SourceState {
 /// the channel carries this enum instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceUpdate {
-    /// A physical button edge, stamped with the device clock (µs) —
-    /// press durations must use it, never delivery time.
+    /// A physical button edge, stamped with the kernel's capture
+    /// clock (µs — REALTIME via the daemon, MONOTONIC via evdev);
+    /// press durations must use same-source deltas, never delivery
+    /// time or the app's monotonic clock.
     Event(ButtonEdge),
     /// Transport connectivity changed (kind of the reporting source).
     State(SourceKind, SourceState),

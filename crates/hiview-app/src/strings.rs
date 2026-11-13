@@ -265,14 +265,17 @@ pub const PREFS_BUTTON_PAGE: &str = "Botão físico";
 /// Preferences row: how the button reaches the app.
 pub const BUTTON_STATUS_LABEL: &str = "Status";
 
-/// Button connected directly via an evdev input device.
-pub const BUTTON_STATUS_EVDEV: &str = "Conectado via evdev";
+/// Button connected directly via an evdev input device (kernel driver).
+pub const BUTTON_STATUS_EVDEV: &str = "Conectado via driver";
 
 /// Button connected via the `hiview-buttond` service socket.
 pub const BUTTON_STATUS_HELPER: &str = "Conectado via serviço";
 
 /// No button transport is delivering events right now.
 pub const BUTTON_STATUS_NONE: &str = "Não disponível";
+
+/// Toast when the button transport drops (daemon stop, unplug).
+pub const BUTTON_DISCONNECTED_TOAST: &str = "Botão físico desconectado";
 
 /// Preferences row: the press duration that toggles recording.
 pub const BUTTON_LONG_PRESS_LABEL: &str = "Toque longo (ms)";
@@ -289,6 +292,13 @@ pub fn button_status(kind: Option<hiview_button::SourceKind>) -> &'static str {
         Some(hiview_button::SourceKind::Helper) => BUTTON_STATUS_HELPER,
         None => BUTTON_STATUS_NONE,
     }
+}
+
+/// Toast when the button transport connects — makes the active
+/// source visible without opening Preferences.
+#[must_use]
+pub fn button_connected_toast(kind: hiview_button::SourceKind) -> String {
+    format!("Botão físico: {}", button_status(Some(kind)))
 }
 
 /// Body of the trash confirmation dialog.
