@@ -259,6 +259,38 @@ pub const STYLE_NAMES: [&str; 3] = ["Cruz", "Cruz com círculo", "Cruz com escal
 /// Preferences row: burn grid/crosshair into saved photos (§6.6).
 pub const PREFS_BURN_LABEL: &str = "Gravar sobreposições na foto";
 
+/// Preferences page title: physical Snap button (§6.10).
+pub const PREFS_BUTTON_PAGE: &str = "Botão físico";
+
+/// Preferences row: how the button reaches the app.
+pub const BUTTON_STATUS_LABEL: &str = "Status";
+
+/// Button connected directly via an evdev input device.
+pub const BUTTON_STATUS_EVDEV: &str = "Conectado via evdev";
+
+/// Button connected via the `hiview-buttond` service socket.
+pub const BUTTON_STATUS_HELPER: &str = "Conectado via serviço";
+
+/// No button transport is delivering events right now.
+pub const BUTTON_STATUS_NONE: &str = "Não disponível";
+
+/// Preferences row: the press duration that toggles recording.
+pub const BUTTON_LONG_PRESS_LABEL: &str = "Toque longo (ms)";
+
+/// Explanatory text under the button group.
+pub const BUTTON_GROUP_DESC: &str = "Toque curto tira foto; segurar inicia ou para a gravação. \
+     Funciona apenas com o microscópio transmitindo.";
+
+/// Preferences status text for the Snap button source (§6.10).
+#[must_use]
+pub fn button_status(kind: Option<hiview_button::SourceKind>) -> &'static str {
+    match kind {
+        Some(hiview_button::SourceKind::Evdev) => BUTTON_STATUS_EVDEV,
+        Some(hiview_button::SourceKind::Helper) => BUTTON_STATUS_HELPER,
+        None => BUTTON_STATUS_NONE,
+    }
+}
+
 /// Body of the trash confirmation dialog.
 pub fn trash_confirm_body(name: &str) -> String {
     format!("\"{name}\" será movido para a lixeira. Você pode recuperá-lo depois.")
@@ -379,3 +411,21 @@ pub fn calibration_default_name(n: usize) -> String {
 
 /// Toast when the typed profile name already exists.
 pub const CALIBRATION_NAME_TAKEN: &str = "Já existe um perfil com esse nome";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hiview_button::SourceKind;
+
+    /// §6.10: the preferences row maps each source kind (and its
+    /// absence) to the PT-BR status the user reads.
+    #[test]
+    fn button_status_maps_every_kind() {
+        assert_eq!(button_status(Some(SourceKind::Evdev)), BUTTON_STATUS_EVDEV);
+        assert_eq!(
+            button_status(Some(SourceKind::Helper)),
+            BUTTON_STATUS_HELPER
+        );
+        assert_eq!(button_status(None), BUTTON_STATUS_NONE);
+    }
+}

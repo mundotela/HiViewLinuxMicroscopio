@@ -9,15 +9,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use hiview_button::{ButtonEvent, SourceKind, SourceState, SourceUpdate, pick_source};
 use hiview_capture::{
     CameraDescriptor, CameraEvent, CameraState, RecordDenied, RecordStop, Recorder,
     check_disk_space,
 };
 use hiview_core::{
-    AdjustKind, AppConfig, AppMode, CalibrationProfile, CrosshairStyle, GridSpacing, ImageAdjust,
-    MeasureCommit, MeasureGesture, MeasureSet, MeasureTool, Orientation, OverlayColor,
-    OverlayState, PhotoFormat, PhotoResolution, Point, ViewOrientation, config_path, digits_of,
-    load_config, overlays_for, range_of, save_config, step_of,
+    AdjustKind, AppConfig, AppMode, ButtonTracker, CalibrationProfile, CrosshairStyle, GridSpacing,
+    ImageAdjust, MeasureCommit, MeasureGesture, MeasureSet, MeasureTool, Orientation, OverlayColor,
+    OverlayState, PhotoFormat, PhotoResolution, Point, PressOutcome, ReleaseOutcome,
+    ViewOrientation, config_path, digits_of, load_config, overlays_for, range_of, save_config,
+    step_of,
 };
 use relm4::actions::{RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
@@ -325,6 +327,13 @@ pub enum Input {
     RequestDeleteCalibration,
     /// Profile deletion confirmed.
     DeleteCalibration,
+    /// A Snap-button transport update: an edge or a connectivity
+    /// change (§6.10).
+    ButtonUpdate(SourceUpdate),
+    /// The long-press deadline timer fired while the button is held.
+    ButtonLongDeadline,
+    /// Preferences "Toque longo (ms)" spin value changed.
+    SetButtonLongPress(f64),
 }
 
 /// Root component of the application.
@@ -438,6 +447,19 @@ pub struct AppModel {
     /// Grid spacing row: its unit (px/mm), digits and range follow the
     /// active calibration, so it is reconfigured imperatively.
     grid_spacing_row: adw::SpinRow,
+    /// Snap-button edge interpreter: debounce + short/long split
+    /// (§6.10). The long threshold mirrors `config.button`.
+    button_tracker: ButtonTracker,
+    /// Whether the button source was picked and started (once per app
+    /// run — the helper reconnects by itself, and the button can only
+    /// fire while the microscope streams).
+    button_started: bool,
+    /// Live transport status for the preferences row: `Some(kind)` =
+    /// connected via that kind, `None` = unavailable.
+    button_status: Option<SourceKind>,
+    /// Status row of the open preferences dialog — updated live when
+    /// the transport connects/drops.
+    pref_button_status: Option<adw::ActionRow>,
 }
 
 #[relm4::component(pub)]
@@ -902,6 +924,7 @@ impl SimpleComponent for AppModel {
         let config_recovered = config_outcome.was_recovered();
         let config = config_outcome.into_config();
         let config_mode = config.mode;
+        let button_long_press = config.button.long_press_ms;
 
         let photos = PhotoService::new({
             let input = sender.input_sender().clone();
@@ -986,6 +1009,10 @@ impl SimpleComponent for AppModel {
             measure_sink: Rc::new(|_| {}),
             bench_prefs: adw::PreferencesPage::new(),
             grid_spacing_row: adw::SpinRow::with_range(0.0, 1.0, 1.0),
+            button_tracker: ButtonTracker::new(50, button_long_press),
+            button_started: false,
+            button_status: None,
+            pref_button_status: None,
         };
         model.sync_menu();
 
@@ -1147,6 +1174,7 @@ impl SimpleComponent for AppModel {
             Input::Camera(event) => {
                 self.camera.on_event(event);
                 self.on_state_change();
+                self.ensure_button_source(&sender);
                 if matches!(self.state, CameraState::Disconnected | CameraState::Error)
                     && let Some(active) = self.recording.take()
                 {
@@ -1156,6 +1184,7 @@ impl SimpleComponent for AppModel {
             Input::SelectCamera(target) => {
                 self.camera.select(&target);
                 self.on_state_change();
+                self.ensure_button_source(&sender);
             }
             Input::FrameReady => {
                 if let Some(frame) = self.camera.frame_bus().take_latest_for_ui() {
@@ -1527,6 +1556,28 @@ impl SimpleComponent for AppModel {
                     tracing::info!("calibration profile deleted: {name}");
                 }
             }
+            Input::ButtonUpdate(update) => match update {
+                SourceUpdate::State(kind, SourceState::Connected) => {
+                    self.button_status = Some(kind);
+                    self.sync_button_status_row();
+                }
+                SourceUpdate::State(_, SourceState::Disconnected) => {
+                    self.button_status = None;
+                    self.button_tracker.reset();
+                    self.sync_button_status_row();
+                }
+                SourceUpdate::Event(event) => self.on_button_edge(event, &sender),
+            },
+            Input::ButtonLongDeadline => {
+                if self.button_tracker.fire_long(now_ms()) {
+                    self.toggle_record(&sender);
+                }
+            }
+            Input::SetButtonLongPress(ms) => {
+                self.config.button.long_press_ms = ms as u64;
+                self.button_tracker.set_long_press_ms(ms as u64);
+                self.persist_config();
+            }
         }
     }
 }
@@ -1576,6 +1627,70 @@ impl AppModel {
             self.fps_label.clear();
         }
         self.sync_menu();
+    }
+
+    /// Starts the Snap-button transport once (§6.10). The pick happens
+    /// on the first streaming transition because the evdev probe needs
+    /// the camera's `ID_PATH`; the helper ignores it. After that the
+    /// source never restarts — the helper reconnects to a restarted
+    /// daemon by itself, and the button can only fire while the
+    /// microscope streams anyway.
+    fn ensure_button_source(&mut self, sender: &ComponentSender<Self>) {
+        if self.button_started || self.state != CameraState::Streaming {
+            return;
+        }
+        let usb_path = self.camera.active_usb_path();
+        let (tx, rx) = std::sync::mpsc::channel::<SourceUpdate>();
+        if let Err(err) = pick_source(usb_path.as_deref()).start(tx) {
+            tracing::warn!("snap button source failed to start: {err}");
+            return;
+        }
+        self.button_started = true;
+        let input = sender.input_sender().clone();
+        if let Err(err) = std::thread::Builder::new()
+            .name("hiview-button-relay".into())
+            .spawn(move || {
+                for update in rx {
+                    if input.send(Input::ButtonUpdate(update)).is_err() {
+                        return;
+                    }
+                }
+            })
+        {
+            tracing::warn!("snap button relay thread: {err}");
+        }
+    }
+
+    /// A Snap edge arrived — interpret it via the tracker (§6.10):
+    /// `Pressed` arms the long-deadline timer, `Released` before the
+    /// deadline is a photo press, a still-held button at the deadline
+    /// toggles recording.
+    fn on_button_edge(&mut self, event: ButtonEvent, sender: &ComponentSender<Self>) {
+        match event {
+            ButtonEvent::Pressed => {
+                if self.button_tracker.press(now_ms()) == PressOutcome::Accepted
+                    && let Some(deadline) = self.button_tracker.long_deadline()
+                {
+                    let wait = deadline.saturating_sub(now_ms()).max(1);
+                    let sender = sender.clone();
+                    glib::timeout_add_local_once(Duration::from_millis(wait), move || {
+                        sender.input(Input::ButtonLongDeadline);
+                    });
+                }
+            }
+            ButtonEvent::Released => {
+                if self.button_tracker.release(now_ms()) == ReleaseOutcome::Short {
+                    self.take_photo();
+                }
+            }
+        }
+    }
+
+    /// Pushes the live transport status into an open preferences row.
+    fn sync_button_status_row(&self) {
+        if let Some(row) = &self.pref_button_status {
+            row.set_subtitle(strings::button_status(self.button_status));
+        }
     }
 
     /// Forwards the current mirror/rotation to the capture pipeline.
@@ -2572,9 +2687,44 @@ impl AppModel {
 
         page.add(&group);
         dialog.add(&page);
+
+        // "Botão físico" page (§6.10): live transport status plus the
+        // long-press threshold that maps to `ButtonTracker`.
+        let bpage = adw::PreferencesPage::new();
+        bpage.set_title(strings::PREFS_BUTTON_PAGE);
+        bpage.set_icon_name(Some("input-keyboard-symbolic"));
+        let bgroup = adw::PreferencesGroup::new();
+        bgroup.set_title(strings::PREFS_BUTTON_PAGE);
+        bgroup.set_description(Some(strings::BUTTON_GROUP_DESC));
+
+        let status_row = adw::ActionRow::new();
+        status_row.set_title(strings::BUTTON_STATUS_LABEL);
+        status_row.set_subtitle(strings::button_status(self.button_status));
+        bgroup.add(&status_row);
+        self.pref_button_status = Some(status_row);
+
+        let long_row = adw::SpinRow::with_range(300.0, 2_000.0, 50.0);
+        crate::measure_ui::swallow_scroll(&long_row);
+        long_row.set_title(strings::BUTTON_LONG_PRESS_LABEL);
+        long_row.set_value(self.config.button.long_press_ms as f64);
+        long_row.connect_value_notify({
+            let sender = sender.clone();
+            move |row| sender.input(Input::SetButtonLongPress(row.value()))
+        });
+        bgroup.add(&long_row);
+
+        bpage.add(&bgroup);
+        dialog.add(&bpage);
+
         crate::focus::watch_dialog(dialog.upcast_ref::<adw::Dialog>(), &self.viewport);
         dialog.present(Some(&self.window));
     }
+}
+
+/// Monotonic milliseconds for [`ButtonTracker`] — `glib::monotonic_time`
+/// is µs since boot, immune to wall-clock adjustments.
+fn now_ms() -> u64 {
+    u64::try_from(glib::monotonic_time().max(0)).unwrap_or_default() / 1000
 }
 
 /// Logs the visible widget tree (window → content → …) at debug level.

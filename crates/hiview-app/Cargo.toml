@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 hiview-core.workspace = true
 hiview-capture.workspace = true
+hiview-button.workspace = true
 gtk.workspace = true
 adw.workspace = true
 relm4.workspace = true
