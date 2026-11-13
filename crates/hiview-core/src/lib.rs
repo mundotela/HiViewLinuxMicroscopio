@@ -7,6 +7,7 @@
 //! This crate must not depend on GTK or GStreamer (docs/ARCHITECTURE.md §5).
 
 mod adjust;
+mod average;
 mod button;
 mod config;
 mod devices;
@@ -24,12 +25,14 @@ pub use adjust::{
     AdjustKind, BRIGHTNESS_RANGE, CONTRAST_RANGE, GAMMA_RANGE, ImageAdjust, SATURATION_RANGE,
     SHARPEN_RANGE, digits_of, range_of, step_of,
 };
+pub use average::{AverageError, FrameAverager};
 pub use button::{
     ButtonEdge, ButtonEvent, ButtonTracker, EVENT_COMPLETE, PressOutcome, ReleaseOutcome,
     SNAP_EPNUM, UsbmonRecord, XFER_INTERRUPT, parse_status_packet, snap_button_event,
 };
 pub use config::{
-    AppConfig, ButtonConfig, ConfigLoad, PhotoConfig, config_path, load_config, save_config,
+    AppConfig, ButtonConfig, ConfigLoad, NOISE_FRAME_OPTIONS, PhotoConfig, config_path,
+    load_config, save_config,
 };
 pub use devices::{KNOWN_MICROSCOPES, KnownMicroscope, is_known_microscope};
 pub use error::{Error, Result};

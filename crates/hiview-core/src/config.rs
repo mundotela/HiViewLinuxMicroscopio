@@ -109,8 +109,12 @@ impl Default for ButtonConfig {
     }
 }
 
+/// Frame counts offered by the "Redução de ruído" combo (M10):
+/// 1 = off (single shot), then 4/8/16 averaged frames.
+pub const NOISE_FRAME_OPTIONS: [u8; 4] = [1, 4, 8, 16];
+
 /// Photo preferences shown in the "Fotos" preferences page.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PhotoConfig {
     /// File format (PNG default).
@@ -122,6 +126,37 @@ pub struct PhotoConfig {
     pub folder: Option<PathBuf>,
     /// Burn the grid/crosshair overlays into the saved photo (§6.6).
     pub burn_overlays: bool,
+    /// Frames averaged for noise reduction (M10); 1 = off. Written by
+    /// the UI from [`NOISE_FRAME_OPTIONS`] — a hand-edited value snaps
+    /// down to the nearest valid choice in [`PhotoConfig::noise_frames`].
+    pub noise_reduction_frames: u8,
+}
+
+impl Default for PhotoConfig {
+    fn default() -> Self {
+        Self {
+            format: PhotoFormat::default(),
+            resolution: PhotoResolution::default(),
+            folder: None,
+            burn_overlays: false,
+            noise_reduction_frames: 1,
+        }
+    }
+}
+
+impl PhotoConfig {
+    /// The effective frame count: snaps a hand-edited value down to
+    /// the nearest entry of [`NOISE_FRAME_OPTIONS`] (7 → 4, 255 → 16).
+    #[must_use]
+    pub fn noise_frames(&self) -> u32 {
+        NOISE_FRAME_OPTIONS
+            .iter()
+            .rev()
+            .find(|&&opt| self.noise_reduction_frames >= opt)
+            .copied()
+            .unwrap_or(1)
+            .into()
+    }
 }
 
 /// Result of [`load_config`].
@@ -454,6 +489,44 @@ mod tests {
                 assert_eq!(c.photo.folder, None);
             }
             _ => panic!("expected Loaded"),
+        }
+    }
+
+    /// M10: `noise_reduction_frames` defaults to 1 (off), round-trips,
+    /// fills from the container default on old configs, and snaps a
+    /// hand-edited value down to the nearest {1,4,8,16} choice.
+    #[test]
+    fn noise_frames_default_and_snap() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let path = dir.path().join("config.toml");
+
+        // Old config without the key → default 1 (off).
+        fs::write(&path, "[photo]\nformat = \"jpeg\"\n").unwrap_or_else(|e| panic!("write: {e}"));
+        match load_config(&path) {
+            ConfigLoad::Loaded(c) => assert_eq!(c.photo.noise_frames(), 1),
+            _ => panic!("expected Loaded"),
+        }
+
+        for (raw, snapped) in [
+            (0u8, 1u32),
+            (1, 1),
+            (3, 1),
+            (4, 4),
+            (7, 4),
+            (8, 8),
+            (15, 8),
+            (16, 16),
+            (200, 16),
+        ] {
+            let cfg = PhotoConfig {
+                noise_reduction_frames: raw,
+                ..PhotoConfig::default()
+            };
+            assert_eq!(
+                cfg.noise_frames(),
+                snapped,
+                "{raw} should snap to {snapped}"
+            );
         }
     }
 }

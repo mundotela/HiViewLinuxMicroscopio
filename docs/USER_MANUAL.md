@@ -158,9 +158,36 @@ O que entra na foto:
 | Gravar sobreposições | Inclui grade, mira e medições na foto, iguais à tela |
 
 > Fotos **PNG** guardam também metadados de texto com a calibração
-> ativa (nome e px/mm), o espelhamento, a rotação e a versão do HiView
-> — útil para conferir depois como a foto foi tirada. Fotos JPEG não
+> ativa (nome e px/mm), o espelhamento, a rotação, a versão do HiView
+> e quantos quadros foram combinados (`noise_reduction_frames`) —
+> útil para conferir depois como a foto foi tirada. Fotos JPEG não
 > levam metadados.
+
+### 7.1 Redução de ruído
+
+Em pouca luz, a imagem sai com "sujinho" (pontos coloridos que tremem).
+A redução de ruído junta várias capturas seguidas numa foto só — o
+ruído, que muda a cada quadro, se cancela; o objeto, que fica parado,
+permanece nítido. O resultado é uma foto bem mais limpa.
+
+- **Quando usar:** pouca luz, ISO alto aparente, objeto **parado**
+  (placa apoiada na mesa, lâmina, componente em repouso).
+- **Quando não usar:** qualquer coisa que se mexe — incluindo a sua
+  mão segurando o microscópio. Se algo se mover durante a captura,
+  a foto sai **borrada** (efeito fantasma).
+- Enquanto captura, aparece o aviso **"Mantenha parado…"** com uma
+  barra de progresso; a foto sai quando a barra fecha (menos de
+  1 segundo na opção de 16 quadros).
+- Com a **imagem congelada** não há quadros novos para combinar — a
+  foto sai do quadro congelado, sem redução de ruído (os metadados
+  registram `noise_reduction_frames=1`).
+- Se a captura não puder terminar (câmera desligada, imagem mudou de
+  tamanho, tempo esgotado), o HiView avisa **"Foto cancelada: …"** e
+  nenhum arquivo incompleto é gravado.
+- Funciona junto com a **gravação de vídeo**: gravar e fotografar com
+  redução ao mesmo tempo é permitido.
+- O botão girar fica bloqueado durante a captura — girar mudaria o
+  tamanho dos quadros e estragaria a média.
 
 ---
 
