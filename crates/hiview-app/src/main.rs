@@ -6,6 +6,7 @@
 //! This file contains only the CLI parsing, the logging setup and the Relm4
 //! application entry point (docs/CONVENTIONS.md §4).
 
+mod about;
 mod app;
 mod cli;
 mod components;
@@ -14,8 +15,10 @@ mod measure_dialogs;
 mod measure_ui;
 mod overlay;
 mod services;
+mod shortcuts;
 mod strings;
 mod toast;
+mod tour;
 mod widgets;
 
 use clap::Parser;

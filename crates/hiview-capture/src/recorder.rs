@@ -86,6 +86,8 @@ pub enum AudioSource {
     /// reproduces a real `pulsesrc` opening its device *inside* the
     /// pipeline's `set_state` call (M10.5 deterministic-base_time
     /// test). The delay must cover at least the A/V tolerance.
+    /// Test-only: compiled under the `test-support` feature.
+    #[cfg(feature = "test-support")]
     #[doc(hidden)]
     Delayed {
         /// How long the source transition takes.
@@ -857,6 +859,7 @@ fn build_audio_branch(
             let eos = src.clone();
             (src, eos)
         }
+        #[cfg(feature = "test-support")]
         AudioSource::Delayed { delay } => {
             let src = make("audiotestsrc")?;
             src.set_property("is-live", true);

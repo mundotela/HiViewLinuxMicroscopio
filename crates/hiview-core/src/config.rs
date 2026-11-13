@@ -27,6 +27,8 @@ pub struct AppConfig {
     pub photo: PhotoConfig,
     /// Recording/video preferences, serialized as `[video]` (M10.5).
     pub video: VideoConfig,
+    /// General UI state, serialized as `[ui]` (M11).
+    pub ui: UiConfig,
     /// Explorar/Bancada mode (`M` toggles it).
     pub mode: AppMode,
     /// Grid and crosshair overlay settings (§6.9).
@@ -123,6 +125,15 @@ pub struct VideoConfig {
     /// PulseAudio source name for the microphone; `None` records the
     /// system default input ("Padrão do sistema" in the UI).
     pub microphone: Option<String>,
+}
+
+/// The `[ui]` section — general UI state (M11).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiConfig {
+    /// The welcome tour was already shown once (`tour_seen = true`).
+    /// It can always be reopened from the menu.
+    pub tour_seen: bool,
 }
 
 /// Frame counts offered by the "Redução de ruído" combo (M10):

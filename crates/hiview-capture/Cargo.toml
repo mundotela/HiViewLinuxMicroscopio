@@ -10,6 +10,12 @@ description = "Video capture hardware layer for HiView (udev, GStreamer, V4L2)"
 [lints]
 workspace = true
 
+[features]
+# Test-only plumbing (AudioSource::Delayed / DelayedBin). Not compiled
+# into the shipped library; enabled for this crate's own integration
+# tests via the dev-dependency below.
+test-support = []
+
 [dependencies]
 hiview-core.workspace = true
 gst.workspace = true
@@ -24,3 +30,7 @@ chrono.workspace = true
 tempfile.workspace = true
 gst-pbutils.workspace = true
 image.workspace = true
+# Self-dependency so integration tests build the lib with the
+# `test-support` feature enabled (cargo does not allow enabling
+# features on the current package directly).
+hiview-capture = { path = ".", features = ["test-support"] }

@@ -474,6 +474,147 @@ pub fn calibration_default_name(n: usize) -> String {
 /// Toast when the typed profile name already exists.
 pub const CALIBRATION_NAME_TAKEN: &str = "Já existe um perfil com esse nome";
 
+// --- M11: menu, janela de atalhos, Sobre, tour ----------------------
+
+/// Menu item opening the keyboard shortcuts window (`Ctrl+?`).
+pub const SHORTCUTS_LABEL: &str = "Atalhos de teclado";
+
+/// Menu item reopening the welcome tour.
+pub const TOUR_MENU_LABEL: &str = "Tour de boas-vindas";
+
+/// Menu item opening the About dialog.
+pub const ABOUT_LABEL: &str = "Sobre o HiView";
+
+/// Menu item that quits the application (`Ctrl+Q`).
+pub const QUIT_LABEL: &str = "Sair";
+
+/// Shortcuts window: section for capture actions.
+pub const SC_GROUP_CAPTURE: &str = "Captura";
+
+/// Shortcuts window: section for app/window actions.
+pub const SC_GROUP_GENERAL: &str = "Geral";
+
+/// Shortcuts window: section for view actions.
+pub const SC_GROUP_VIEW: &str = "Visualização";
+
+/// Shortcuts window: section for measurement tools (Bancada).
+pub const SC_GROUP_MEASURE: &str = "Medição (modo Bancada)";
+
+/// Shortcut label: take a photo.
+pub const SC_TAKE_PHOTO: &str = "Tirar foto";
+
+/// Shortcut label: start/stop recording.
+pub const SC_RECORD: &str = "Iniciar/parar gravação";
+
+/// Shortcut label: toggle microphone audio for the next recording.
+pub const SC_TOGGLE_MIC: &str = "Áudio do microfone na próxima gravação";
+
+/// Shortcut label: freeze/unfreeze the live frame.
+pub const SC_FREEZE: &str = "Congelar/descongelar imagem";
+
+/// Shortcut label: switch between Explorar and Bancada modes.
+pub const SC_TOGGLE_MODE: &str = "Alternar Explorar/Bancada";
+
+/// Shortcut label: open/close the gallery.
+pub const SC_GALLERY: &str = "Abrir/fechar a Galeria";
+
+/// Shortcut label: preferences.
+pub const SC_PREFERENCES: &str = "Preferências";
+
+/// Shortcut label: the shortcuts window itself.
+pub const SC_SHORTCUTS: &str = "Mostrar os atalhos";
+
+/// Shortcut label: fullscreen.
+pub const SC_FULLSCREEN: &str = "Tela cheia";
+
+/// Shortcut label: leave fullscreen / cancel a measurement.
+pub const SC_ESCAPE: &str = "Sair da tela cheia / cancelar medição";
+
+/// Shortcut label: quit.
+pub const SC_QUIT: &str = "Sair";
+
+/// Shortcut label: grid overlay.
+pub const SC_GRID: &str = "Grade";
+
+/// Shortcut label: crosshair overlay.
+pub const SC_CROSSHAIR: &str = "Mira";
+
+/// Shortcut label: horizontal mirror.
+pub const SC_MIRROR_H: &str = "Espelhar horizontalmente";
+
+/// Shortcut label: vertical mirror.
+pub const SC_MIRROR_V: &str = "Espelhar verticalmente";
+
+/// Shortcut label: rotate counterclockwise.
+pub const SC_ROTATE_CCW: &str = "Girar −90°";
+
+/// Shortcut label: rotate clockwise.
+pub const SC_ROTATE_CW: &str = "Girar +90°";
+
+/// Shortcut label: zoom in.
+pub const SC_ZOOM_IN: &str = "Aproximar";
+
+/// Shortcut label: zoom out.
+pub const SC_ZOOM_OUT: &str = "Afastar";
+
+/// Shortcut label: fit the frame to the window.
+pub const SC_FIT_VIEW: &str = "Ajustar à janela";
+
+/// Shortcut label: 100% zoom.
+pub const SC_ZOOM_100: &str = "Tamanho real (100%)";
+
+/// Shortcut label: ruler tool.
+pub const SC_MEASURE_RULER: &str = "Régua";
+
+/// Shortcut label: angle tool.
+pub const SC_MEASURE_ANGLE: &str = "Ângulo";
+
+/// Shortcut label: circle tool.
+pub const SC_MEASURE_CIRCLE: &str = "Círculo";
+
+/// Tour dialog title.
+pub const TOUR_TITLE: &str = "Bem-vindo ao HiView";
+
+/// Tour page 1 title.
+pub const TOUR_P1_TITLE: &str = "Seu microscópio no computador";
+
+/// Tour page 1 body.
+pub const TOUR_P1_BODY: &str = "O HiView mostra ao vivo a imagem do microscópio. \
+Use o modo Explorar para olhar livremente e o modo Bancada (tecla M) \
+para medir com grade, mira e réguas.";
+
+/// Tour page 2 title.
+pub const TOUR_P2_TITLE: &str = "Fotos e vídeos com um toque";
+
+/// Tour page 2 body.
+pub const TOUR_P2_BODY: &str = "Aperte Espaço (ou o botão Snap do microscópio) \
+para tirar foto, e R para gravar vídeo. Um aperto longo no Snap também \
+inicia a gravação. Tudo fica na Galeria (Ctrl+G).";
+
+/// Tour page 3 title.
+pub const TOUR_P3_TITLE: &str = "Meça com calibração";
+
+/// Tour page 3 body.
+pub const TOUR_P3_BODY: &str = "No modo Bancada, calibre uma vez com uma \
+distância conhecida e depois meça em milímetros com a régua (L), \
+o ângulo (A) e o círculo (O).";
+
+/// Tour button: skip the rest.
+pub const TOUR_SKIP: &str = "Pular";
+
+/// Tour button: next page.
+pub const TOUR_NEXT: &str = "Avançar";
+
+/// Tour button on the last page: finish.
+pub const TOUR_START: &str = "Começar";
+
+/// About dialog: developer credits line for the assisted
+/// implementation (wording pending engineering review — M11 report).
+pub const ABOUT_DEV_AI: &str = "Devin (Cognition) — implementação assistida por IA";
+
+/// About dialog: the human developer credit.
+pub const ABOUT_DEV_HENRIQUE: &str = "Henrique — MundoTela Tecnologia";
+
 #[cfg(test)]
 mod tests {
     use super::*;
