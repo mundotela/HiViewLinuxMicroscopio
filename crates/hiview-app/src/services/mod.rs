@@ -5,5 +5,6 @@
 
 pub mod camera;
 pub mod gallery;
+pub mod noise;
 pub mod photo;
 pub mod recorder;

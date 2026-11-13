@@ -922,6 +922,7 @@ dependencies = [
  "libadwaita",
  "relm4",
  "signal-hook",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

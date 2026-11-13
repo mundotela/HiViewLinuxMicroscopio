@@ -16,10 +16,10 @@ use hiview_capture::{
 };
 use hiview_core::{
     AdjustKind, AppConfig, AppMode, ButtonTracker, CalibrationProfile, CrosshairStyle, GridSpacing,
-    ImageAdjust, MeasureCommit, MeasureGesture, MeasureSet, MeasureTool, Orientation, OverlayColor,
-    OverlayState, PhotoFormat, PhotoResolution, Point, PressOutcome, ReleaseOutcome,
-    ViewOrientation, config_path, digits_of, load_config, overlays_for, range_of, save_config,
-    step_of,
+    ImageAdjust, MeasureCommit, MeasureGesture, MeasureSet, MeasureTool, NOISE_FRAME_OPTIONS,
+    Orientation, OverlayColor, OverlayState, PhotoFormat, PhotoResolution, Point, PressOutcome,
+    ReleaseOutcome, ViewOrientation, config_path, digits_of, load_config, overlays_for, range_of,
+    save_config, step_of,
 };
 use relm4::actions::{RelmAction, RelmActionGroup};
 use relm4::adw::prelude::*;
@@ -35,6 +35,7 @@ use crate::components::gallery::{
 };
 use crate::measure_ui::MeasurePanel;
 use crate::services::camera::CameraService;
+use crate::services::noise::{NoiseCancel, NoiseCapture, NoiseOutcome};
 use crate::services::photo::{PhotoOutcome, PhotoService};
 use crate::services::recorder::{ActiveRecording, StopReason, filesystem_free_bytes};
 use crate::strings;
@@ -76,6 +77,13 @@ pub const GLOBAL_CSS: &str = ".fps-indicator {
 .shutter-flash.on {
     opacity: 0.55;
     transition: none;
+}
+.noise-progress {
+    background-color: rgba(0, 0, 0, 0.7);
+    color: #ffffff;
+    padding: 14px 18px;
+    border-radius: 12px;
+    font-weight: bold;
 }
 .shutter-button {
     padding: 12px;
@@ -262,6 +270,10 @@ pub enum Input {
     SetPhotoFormat(u32),
     /// Resolution combo changed (0 = native, 1 = 1280x960, 2 = 1600x1200).
     SetPhotoResolution(u32),
+    /// Noise-reduction combo changed (index into `NOISE_FRAME_OPTIONS`).
+    SetNoiseReduction(u32),
+    /// A noise-reduction capture reported progress/done/cancelled (M10).
+    NoiseUpdate(NoiseOutcome),
     /// A new photo folder was picked in the preferences dialog.
     SetPhotoFolder(PathBuf),
     /// Open the gallery page (`Ctrl+G` or the header button).
@@ -465,6 +477,12 @@ pub struct AppModel {
     /// Status row of the open preferences dialog — updated live when
     /// the transport connects/drops.
     pref_button_status: Option<adw::ActionRow>,
+    /// Noise-reduction capture in flight (M10): `Some` blocks new
+    /// shots and rotation, `None` means the photo path is a single
+    /// frame. Dropping the handle cancels the worker.
+    noise_capture: Option<NoiseCapture>,
+    /// `got / total` fraction shown by the progress overlay.
+    noise_progress: f64,
 }
 
 #[relm4::component(pub)]
@@ -721,6 +739,28 @@ impl SimpleComponent for AppModel {
                             set_css_classes: &["frozen-badge"],
                             #[watch]
                             set_visible: model.frozen,
+                        },
+
+                        // M10: centered "hold still" notice + progress
+                        // bar while frames are averaged.
+                        add_overlay = &gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 8,
+                            set_halign: gtk::Align::Center,
+                            set_valign: gtk::Align::Center,
+                            set_css_classes: &["noise-progress"],
+                            set_can_target: false,
+                            #[watch]
+                            set_visible: model.noise_capture.is_some(),
+
+                            gtk::Label {
+                                set_label: strings::NOISE_HOLD_STILL,
+                            },
+                            gtk::ProgressBar {
+                                set_width_request: 240,
+                                #[watch]
+                                set_fraction: model.noise_progress,
+                            },
                         },
 
                         add_overlay = &gtk::Box {
@@ -1018,6 +1058,8 @@ impl SimpleComponent for AppModel {
             button_started: false,
             button_status: None,
             pref_button_status: None,
+            noise_capture: None,
+            noise_progress: 0.0,
         };
         model.sync_menu();
 
@@ -1180,10 +1222,13 @@ impl SimpleComponent for AppModel {
                 self.camera.on_event(event);
                 self.on_state_change();
                 self.ensure_button_source(&sender);
-                if matches!(self.state, CameraState::Disconnected | CameraState::Error)
-                    && let Some(active) = self.recording.take()
-                {
-                    self.begin_finalize(active, StopReason::Disconnected, &sender);
+                if matches!(self.state, CameraState::Disconnected | CameraState::Error) {
+                    // No frames will arrive — stop the average and
+                    // explain (M10 cancel rule).
+                    self.cancel_noise_capture();
+                    if let Some(active) = self.recording.take() {
+                        self.begin_finalize(active, StopReason::Disconnected, &sender);
+                    }
                 }
             }
             Input::SelectCamera(target) => {
@@ -1213,20 +1258,21 @@ impl SimpleComponent for AppModel {
                 self.orientation.toggle_mirror_v();
                 self.on_orientation_changed(from);
             }
-            // Rotation is blocked while recording: a video cannot change
-            // resolution mid-file (docs/ARCHITECTURE.md section 6.4).
-            Input::RotateCcw if self.recording.is_none() => {
+            // Rotation is blocked while recording (a video cannot
+            // change resolution mid-file, §6.4) and during a noise
+            // capture (M10: the frames must share one geometry).
+            Input::RotateCcw if self.recording.is_none() && self.noise_capture.is_none() => {
                 let from = self.orientation.method();
                 self.orientation.rotate_ccw();
                 self.on_orientation_changed(from);
             }
-            Input::RotateCw if self.recording.is_none() => {
+            Input::RotateCw if self.recording.is_none() && self.noise_capture.is_none() => {
                 let from = self.orientation.method();
                 self.orientation.rotate_cw();
                 self.on_orientation_changed(from);
             }
             Input::RotateCcw | Input::RotateCw => {
-                tracing::debug!("rotate ignored while recording");
+                tracing::debug!("rotate ignored while recording or averaging");
             }
             Input::ToggleFreeze => {
                 if self.state == CameraState::Streaming && self.recording.is_none() {
@@ -1249,9 +1295,9 @@ impl SimpleComponent for AppModel {
                     self.window.unfullscreen();
                 }
             }
-            Input::TakePhoto => self.take_photo(),
+            Input::TakePhoto => self.take_photo(&sender),
             Input::Shutter => match self.shutter_mode {
-                ShutterMode::Photo => self.take_photo(),
+                ShutterMode::Photo => self.take_photo(&sender),
                 ShutterMode::Video => self.toggle_record(&sender),
             },
             Input::ShutterModeToggled => {
@@ -1309,6 +1355,14 @@ impl SimpleComponent for AppModel {
                 };
                 self.persist_config();
             }
+            Input::SetNoiseReduction(sel) => {
+                let frames = NOISE_FRAME_OPTIONS.get(sel as usize).copied().unwrap_or(1);
+                if self.config.photo.noise_reduction_frames != frames {
+                    self.config.photo.noise_reduction_frames = frames;
+                    self.persist_config();
+                }
+            }
+            Input::NoiseUpdate(outcome) => self.on_noise_update(outcome),
             Input::SetPhotoFolder(path) => {
                 self.config.photo.folder = Some(path);
                 if let Some(row) = &self.pref_folder_row {
@@ -1705,7 +1759,7 @@ impl AppModel {
             }
             ButtonEvent::Released => {
                 if self.button_tracker.release(edge.ts_ms()) == ReleaseOutcome::Short {
-                    self.take_photo();
+                    self.take_photo(sender);
                 }
             }
         }
@@ -1873,9 +1927,10 @@ impl AppModel {
     }
 
     /// PNG `tEXt` provenance for the next photo (§6.6, M8): app
-    /// version, mirror/rotation and the active calibration. JPEG
-    /// files carry no metadata (out of scope).
-    fn photo_png_text(&self) -> Vec<(String, String)> {
+    /// version, mirror/rotation, the active calibration and — since
+    /// M10 — `noise_reduction_frames` (1 on single-frame shots, N on
+    /// averaged ones). JPEG files carry no metadata (out of scope).
+    fn photo_png_text(&self, noise_frames: u32) -> Vec<(String, String)> {
         let mirror = match (self.orientation.mirror_h(), self.orientation.mirror_v()) {
             (true, true) => "H+V",
             (true, false) => "H",
@@ -1897,6 +1952,7 @@ impl AppModel {
             meta.push(("Calibration".into(), p.name.clone()));
             meta.push(("Calibration px/mm".into(), format!("{:.3}", p.px_per_mm)));
         }
+        meta.push(("noise_reduction_frames".into(), noise_frames.to_string()));
         meta
     }
 
@@ -2134,40 +2190,116 @@ impl AppModel {
         }
     }
 
-    /// Takes a photo from the frozen/latest frame (section 6.6). Works
-    /// while recording — photos are still allowed (M4). When "Gravar
-    /// sobreposições na foto" is on, the visible overlays are burned in
-    /// (frozen-frame photos included — `photo_frame` already picks the
-    /// frozen frame).
-    fn take_photo(&mut self) {
-        if self.state == CameraState::Streaming
-            && let Some(frame) = self.viewport.photo_frame()
+    /// Takes a photo from the frozen/latest frame (section 6.6) —
+    /// or starts a noise-reduction capture (M10) when the preference
+    /// is above 1 and the view is live. Works while recording —
+    /// photos are still allowed (M4). When "Gravar sobreposições na
+    /// foto" is on, the visible overlays are burned in (frozen-frame
+    /// photos included — `photo_frame` already picks the frozen one).
+    fn take_photo(&mut self, sender: &ComponentSender<Self>) {
+        if self.state != CameraState::Streaming {
+            return;
+        }
+        // One capture at a time (M10): shots fired mid-average are
+        // ignored, never queued.
+        if self.noise_capture.is_some() {
+            tracing::debug!("noise-reduction capture running; shot ignored");
+            return;
+        }
+        let frames = self.config.photo.noise_frames();
+        if frames > 1 && !self.frozen {
+            self.start_noise_capture(frames, sender);
+            return;
+        }
+        // Single-frame path: frozen frame or reduction off (a frozen
+        // photo can never be averaged — metadata records `=1`).
+        if let Some(frame) = self.viewport.photo_frame() {
+            self.queue_photo(&frame, 1);
+        }
+    }
+
+    /// Feeds the photo worker with `frame` and `noise_frames` for the
+    /// `noise_reduction_frames` PNG tEXt key (1 on single-frame shots).
+    fn queue_photo(&mut self, frame: &hiview_capture::Frame, noise_frames: u32) {
+        let overlays = if self.config.photo.burn_overlays {
+            // Burn the committed measurements — never a
+            // half-finished draft (§6.9).
+            self.current_overlays().map(|mut s| {
+                s.measure.draft = None;
+                s
+            })
+        } else {
+            None
+        };
+        if self
+            .photos
+            .take(
+                frame,
+                &self.config.photo,
+                self.photo_dir(),
+                overlays,
+                self.photo_png_text(noise_frames),
+            )
+            .is_ok()
         {
-            let overlays = if self.config.photo.burn_overlays {
-                // Burn the committed measurements — never a
-                // half-finished draft (§6.9).
-                self.current_overlays().map(|mut s| {
-                    s.measure.draft = None;
-                    s
-                })
-            } else {
-                None
-            };
-            if self
-                .photos
-                .take(
-                    &frame,
-                    &self.config.photo,
-                    self.photo_dir(),
-                    overlays,
-                    self.photo_png_text(),
-                )
-                .is_ok()
-            {
-                self.flash_shutter();
-            } else {
-                self.show_toast(adw::Toast::new(strings::PHOTO_BUSY));
+            self.flash_shutter();
+        } else {
+            self.show_toast(adw::Toast::new(strings::PHOTO_BUSY));
+        }
+    }
+
+    /// M10: subscribes a full FrameBus consumer and lets the noise
+    /// worker average `frames` consecutive frames. Everything after —
+    /// progress overlay, cancel paths, the actual save — arrives via
+    /// `Input::NoiseUpdate`.
+    fn start_noise_capture(&mut self, frames: u32, sender: &ComponentSender<Self>) {
+        let subscription = self.camera.frame_bus().subscribe();
+        let input = sender.input_sender().clone();
+        self.noise_progress = 0.0;
+        self.noise_capture = Some(crate::services::noise::capture(
+            subscription,
+            frames,
+            move |outcome| {
+                let _ = input.send(Input::NoiseUpdate(outcome));
+            },
+        ));
+        tracing::info!("noise reduction: averaging {frames} frames");
+    }
+
+    /// Worker reports from the noise capture: progress → bar, Done →
+    /// the normal photo path (resolution/format/overlays/metadata),
+    /// Cancelled → the matching toast. A stale report after an
+    /// app-side cancel is dropped.
+    fn on_noise_update(&mut self, outcome: NoiseOutcome) {
+        if self.noise_capture.is_none() {
+            tracing::debug!("noise update ignored: no capture running");
+            return;
+        }
+        match outcome {
+            NoiseOutcome::Progress { got, total } => {
+                self.noise_progress = f64::from(got) / f64::from(total.max(1));
             }
+            NoiseOutcome::Done { frame, frames } => {
+                self.noise_capture = None;
+                self.noise_progress = 0.0;
+                self.queue_photo(&frame, frames);
+            }
+            NoiseOutcome::Cancelled(reason) => {
+                self.noise_capture = None;
+                self.noise_progress = 0.0;
+                self.show_toast(adw::Toast::new(strings::noise_cancelled(reason)));
+            }
+        }
+    }
+
+    /// Stops a running capture because the camera went away: drops
+    /// the handle (worker exits on its flag) and explains. Idempotent.
+    fn cancel_noise_capture(&mut self) {
+        if self.noise_capture.take().is_some() {
+            self.noise_progress = 0.0;
+            self.show_toast(adw::Toast::new(strings::noise_cancelled(
+                NoiseCancel::Disconnected,
+            )));
         }
     }
 
@@ -2674,6 +2806,23 @@ impl AppModel {
             move |row| sender.input(Input::SetPhotoResolution(row.selected()))
         });
         group.add(&res_row);
+
+        // M10: "Redução de ruído" — off / 4 / 8 / 16 averaged frames.
+        let noise_row = adw::ComboRow::new();
+        crate::measure_ui::swallow_scroll(&noise_row);
+        noise_row.set_title(strings::PREFS_NOISE_LABEL);
+        noise_row.set_model(Some(&gtk::StringList::new(&strings::NOISE_CHOICES)));
+        noise_row.set_selected(
+            NOISE_FRAME_OPTIONS
+                .iter()
+                .position(|&n| n == self.config.photo.noise_frames() as u8)
+                .unwrap_or(0) as u32,
+        );
+        noise_row.connect_selected_notify({
+            let sender = sender.clone();
+            move |row| sender.input(Input::SetNoiseReduction(row.selected()))
+        });
+        group.add(&noise_row);
 
         let folder_row = adw::ActionRow::new();
         folder_row.set_title(strings::PREFS_FOLDER_LABEL);

@@ -259,6 +259,35 @@ pub const STYLE_NAMES: [&str; 3] = ["Cruz", "Cruz com círculo", "Cruz com escal
 /// Preferences row: burn grid/crosshair into saved photos (§6.6).
 pub const PREFS_BURN_LABEL: &str = "Gravar sobreposições na foto";
 
+/// Preferences row: frame-averaging noise reduction (M10).
+pub const PREFS_NOISE_LABEL: &str = "Redução de ruído";
+
+/// Combo choices for `PREFS_NOISE_LABEL` — same order as
+/// `NOISE_FRAME_OPTIONS` (off, 4, 8, 16 frames).
+pub const NOISE_CHOICES: [&str; 4] = ["Desligada", "4 quadros", "8 quadros", "16 quadros"];
+
+/// Centered notice over the video while frames are averaged (M10).
+pub const NOISE_HOLD_STILL: &str = "Mantenha parado…";
+
+/// Toast when the average could not finish: deadline hit.
+pub const NOISE_CANCEL_TIMEOUT: &str = "Foto cancelada: tempo esgotado";
+
+/// Toast when the average could not finish: geometry changed.
+pub const NOISE_CANCEL_RESIZE: &str = "Foto cancelada: a imagem mudou de tamanho";
+
+/// Toast when the average could not finish: camera went away.
+pub const NOISE_CANCEL_DISCONNECTED: &str = "Foto cancelada: câmera desconectada";
+
+/// Maps a noise-capture cancel reason to its toast text (M10).
+#[must_use]
+pub fn noise_cancelled(reason: crate::services::noise::NoiseCancel) -> &'static str {
+    match reason {
+        crate::services::noise::NoiseCancel::Timeout => NOISE_CANCEL_TIMEOUT,
+        crate::services::noise::NoiseCancel::SizeChanged => NOISE_CANCEL_RESIZE,
+        crate::services::noise::NoiseCancel::Disconnected => NOISE_CANCEL_DISCONNECTED,
+    }
+}
+
 /// Preferences page title: physical Snap button (§6.10).
 pub const PREFS_BUTTON_PAGE: &str = "Botão físico";
 
