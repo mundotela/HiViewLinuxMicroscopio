@@ -186,6 +186,18 @@ impl CameraService {
         }
     }
 
+    /// udev `ID_PATH` of the camera the pipeline is using — the Snap
+    /// button sits on the same USB device, so the evdev probe matches
+    /// its input node against this (docs/ARCHITECTURE.md §6.10).
+    /// `None` for non-USB sources or while no pipeline runs.
+    #[must_use]
+    pub fn active_usb_path(&self) -> Option<String> {
+        match self.pipeline.as_ref()?.source() {
+            CaptureSource::Device(desc) => desc.usb_path.clone(),
+            _ => None,
+        }
+    }
+
     /// Config key identifying the active source for per-device
     /// adjustment persistence (docs/ARCHITECTURE.md §6.12): `"VID:PID"`
     /// for USB cameras, the stable id when a device has no USB

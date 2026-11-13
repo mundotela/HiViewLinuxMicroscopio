@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# HiView Snap button daemon (docs/ARCHITECTURE.md §6.10).
+# Root only because /dev/usbmon* is root:root 0600; everything else is
+# locked down below. Installed by scripts/install-buttond.sh.
+
+[Unit]
+Description=HiView Snap button daemon
+Documentation=https://github.com/portskoll/HiViewLinuxMicroscopio
+# usbmon comes from modules-load.d; udev answers device enumeration.
+After=systemd-modules-load.service systemd-udevd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/libexec/hiview-buttond
+Restart=on-failure
+RestartSec=1
+
+# --- Privileges ---------------------------------------------------
+# Runs as root for /dev/usbmon*, but with ZERO capabilities: the only
+# privileged-looking operation is the socket chgrp to `hiview`, which
+# needs no CAP_CHOWN because the service is a member of that group
+# (chgrp to a group you belong to is permitted for the file owner).
+SupplementaryGroups=hiview
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# --- Filesystem ---------------------------------------------------
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RemoveIPC=yes
+# Socket lives in /run/hiview, created writable by RuntimeDirectory=
+# even with ProtectSystem=strict.
+RuntimeDirectory=hiview
+RuntimeDirectoryMode=0755
+UMask=0077
+
+# --- Devices ------------------------------------------------------
+# DeviceAllow hides every device except the usbmon readers. `char-`
+# selects the driver class from /proc/devices (usbmon registers major
+# 180); DeviceAllow does NOT accept path globs like /dev/usbmon*.
+# NOTE: PrivateDevices=yes would hide /dev/usbmon* too (private
+# namespace contains only pseudo-devices), so it must NOT be set.
+DevicePolicy=closed
+DeviceAllow=char-usbmon rw
+
+# --- Network ------------------------------------------------------
+# The daemon has no network code at all; the unix socket works inside
+# a private network namespace. Hotplug is handled by periodic sysfs
+# re-enumeration — kernel uevents (netlink) cannot cross a private
+# netns anyway — so even AF_NETLINK stays blocked.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+# --- Kernel surface -----------------------------------------------
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

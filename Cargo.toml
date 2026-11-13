@@ -20,6 +20,7 @@ expect_used = "warn"
 [workspace.dependencies]
 hiview-core = { path = "crates/hiview-core" }
 hiview-capture = { path = "crates/hiview-capture" }
+hiview-button = { path = "crates/hiview-button" }
 gtk = { package = "gtk4", version = "0.11", features = ["v4_14"] }
 adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }
 # gnome_46 = gtk/v4_14 + adw/v1_5 + gio 2.80: exactly the system stack.
@@ -29,6 +30,8 @@ gst-app = { package = "gstreamer-app", version = "0.25", features = ["v1_24"], d
 gst-video = { package = "gstreamer-video", version = "0.25", features = ["v1_24"], default-features = false }
 gst-pbutils = { package = "gstreamer-pbutils", version = "0.25", features = ["v1_24"], default-features = false }
 udev = "0.9"
+evdev = "0.13"
+nix = { version = "0.31", default-features = false, features = ["ioctl", "poll", "fs", "user"] }
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"

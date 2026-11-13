@@ -33,6 +33,9 @@ pub struct AppConfig {
     /// stable id for non-USB cameras; `"test"`/`"file"` for the fixed
     /// CLI sources). Serialized as `[devices."05e3:f12a"]` (§6.12).
     pub devices: BTreeMap<String, ImageAdjust>,
+    /// Physical Snap button preferences, serialized as `[button]`
+    /// (§6.10).
+    pub button: ButtonConfig,
     /// Named calibration profiles, serialized as `[[calibration]]`
     /// (§6.12).
     pub calibration: Vec<CalibrationProfile>,
@@ -88,6 +91,21 @@ impl AppConfig {
         if self.active_calibration.as_deref() == Some(name) {
             self.active_calibration = None;
         }
+    }
+}
+
+/// The `[button]` section — physical Snap button preferences (§6.10).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ButtonConfig {
+    /// Hold time (ms) that turns a press into a record toggle;
+    /// shorter releases are photo presses.
+    pub long_press_ms: u64,
+}
+
+impl Default for ButtonConfig {
+    fn default() -> Self {
+        Self { long_press_ms: 700 }
     }
 }
 

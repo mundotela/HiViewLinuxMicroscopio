@@ -11,3 +11,10 @@ description = "Physical Snap button abstraction for HiView"
 workspace = true
 
 [dependencies]
+hiview-core.workspace = true
+evdev.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

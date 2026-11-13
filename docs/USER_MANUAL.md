@@ -58,15 +58,18 @@ Depois, procure **HiView** no menu de aplicativos.
 
 ### 3.2 Botão físico Snap (opcional)
 
-O sistema Linux atual não reconhece o botão Snap deste microscópio sozinho. O pacote extra `hiview-buttond` resolve isso:
+O sistema Linux atual não reconhece o botão Snap deste microscópio sozinho. Um pequeno serviço opcional, o `hiview-buttond`, resolve isso. Para instalar, rode dentro da pasta do projeto:
 
 ```bash
-sudo apt install ./hiview-buttond_<versão>_amd64.deb
+cargo build --release -p hiview-buttond
+sudo ./scripts/install-buttond.sh
 ```
+
+O instalador exige o binário já compilado (o `cargo build` acima), cria o grupo `hiview`, adiciona o seu usuário a ele e ativa o serviço. Para desinstalar: `sudo ./scripts/install-buttond.sh --uninstall`.
 
 **Depois de instalar, saia da sessão e entre novamente** (logout/login). Isso é necessário para liberar o acesso ao botão.
 
-> **Sobre segurança:** esse componente roda com privilégios de administrador porque precisa observar a comunicação USB. Ele foi feito para enviar ao HiView **somente** "botão apertado" e "botão solto", e não tem acesso à rede. Se preferir não instalar, tudo funciona normalmente pelo teclado e pelo mouse.
+> **Sobre segurança:** esse componente roda com privilégios de administrador porque só o root pode observar a comunicação USB (`/dev/usbmon`). Ele foi feito para enviar ao HiView **somente** duas mensagens — "botão apertado" e "botão solto". Nenhum dado do USB (imagem, vídeo ou qualquer outro tráfego) sai do serviço, ele não grava arquivos e não tem acesso à rede. Se preferir não instalar, tudo funciona normalmente pelo teclado e pelo mouse.
 
 ---
 
@@ -210,9 +213,9 @@ Com o componente opcional instalado (seção 3.2):
 | Clique curto | Tira foto |
 | Segurar ~1 segundo | Inicia/para a gravação |
 
-Você pode mudar o tempo do clique longo em Preferências → Botão físico. Lá também aparece o status do botão: **"conectado"** ou **"não disponível"**.
+Você pode mudar o tempo do clique longo em Preferências → **Botão físico** (padrão: 700 ms). A mesma página mostra o status do botão: **"Conectado via driver"** (leitura direta do kernel), **"Conectado via serviço"** (daemon `hiview-buttond`) ou **"Não disponível"**. Um aviso (toast) também aparece na janela quando o botão conecta ou desconecta.
 
-> O botão só funciona com o HiView aberto.
+> O botão só funciona com o HiView aberto e com o microscópio transmitindo imagem.
 
 ---
 
