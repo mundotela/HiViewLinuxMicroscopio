@@ -69,7 +69,7 @@ O instalador exige o binário já compilado (o `cargo build` acima), cria o grup
 
 **Depois de instalar, saia da sessão e entre novamente** (logout/login). Isso é necessário para liberar o acesso ao botão.
 
-> **Sobre segurança:** esse componente roda com privilégios de administrador porque precisa observar a comunicação USB. Ele foi feito para enviar ao HiView **somente** "botão apertado" e "botão solto", e não tem acesso à rede. Se preferir não instalar, tudo funciona normalmente pelo teclado e pelo mouse.
+> **Sobre segurança:** esse componente roda com privilégios de administrador porque só o root pode observar a comunicação USB (`/dev/usbmon`). Ele foi feito para enviar ao HiView **somente** duas mensagens — "botão apertado" e "botão solto". Nenhum dado do USB (imagem, vídeo ou qualquer outro tráfego) sai do serviço, ele não grava arquivos e não tem acesso à rede. Se preferir não instalar, tudo funciona normalmente pelo teclado e pelo mouse.
 
 ---
 
