@@ -6,6 +6,36 @@ microscópios USB do padrão UVC — ver, fotografar, gravar e medir.
 Documentação completa em [`docs/`](docs/): arquitetura, convenções, milestones
 e manual do usuário.
 
+## Instalação (pacotes .deb)
+
+A forma recomendada para o usuário final é o pacote Debian — ele já
+declara todas as dependências de runtime e instala ícone, `.desktop`
+e metainfo:
+
+```bash
+sudo apt install ./hiview_1.0.0-1_amd64.deb            # aplicativo
+sudo apt install ./hiview-buttond_1.0.0-1_amd64.deb    # opcional: botão Snap
+```
+
+Após instalar o `hiview-buttond`, faça **logout/login** para liberar o
+acesso ao botão. O manual do usuário (`docs/USER_MANUAL.md` §3) detalha
+desinstalação e migração de instalações feitas pelo script.
+
+## Gerando os pacotes
+
+Requer `cargo-deb` (`cargo install cargo-deb`) e as dependências de
+sistema abaixo:
+
+```bash
+cargo deb -p hiview-app
+cargo deb -p hiview-buttond
+# Saída em target/debian/*.deb — inspecione com dpkg-deb -I / -c e lintian
+```
+
+O pacote do daemon é gerado a partir de `crates/hiview-buttond/debian/`
+(unit, sysusers, maintainer scripts). **Não instale sem a revisão de
+segurança da engenharia** (`docs/CONVENTIONS.md` §11.1).
+
 ## Requisitos de sistema
 
 Pop!_OS / Ubuntu 24.04 ou superior, com:
@@ -25,7 +55,7 @@ No Pop!_OS 24.04 / Ubuntu 24.04:
 sudo apt install libgtk-4-dev libadwaita-1-dev \
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-    gstreamer1.0-plugins-ugly gstreamer1.0-tools
+    gstreamer1.0-plugins-ugly gstreamer1.0-tools libudev-dev
 ```
 
 `gstreamer1.0-plugins-ugly` fornece o `x264enc` (encoder H.264 da gravação)
