@@ -226,6 +226,8 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 
 ## M9 — Botão físico Snap
 
+> **Concluído em 2026-11-12** (merge `3a8c9e8`). Três rodadas de revisão de segurança antes do `sudo`. Correções de campo: relógio REALTIME do usbmon quebrava o aperto longo; toasts de status repetidos a cada tentativa de reconexão. Relatório em `docs/reports/M9.md`.
+
 **Escopo:**
 
 - Parser em `hiview-core` (testado com os bytes reais: `02010001`, `02010000`).
@@ -279,5 +281,10 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 - Reportar ao GTK o bug de `translate_coordinates` sem checagem de `native == NULL` (crossing events sobre widgets desparentados; presente no 4.14.5 e no 4.18.6). Evidência em `docs/reports/M5.md`.
 - Galeria: `gio::FileMonitor` para refletir alterações externas nas pastas em tempo real (hoje, a lista é atualizada ao abrir).
 - Galeria: seleção múltipla e arrastar-e-soltar.
+- **Botão físico (pendências do M9):**
+  - corrigir `Documentation=` em `data/hiview-buttond.service` (aponta para `github.com/portskoll/...`; o repositório é `github.com/mundotela/...`);
+  - indicador permanente do botão na janela principal (hoje: Preferências + toasts);
+  - histerese/validação da duração apertar→soltar contra ajuste de relógio (NTP) no meio de um aperto (probabilidade mínima);
+  - validar o caminho evdev quando existir hardware/kernel que gere `KEY_CAMERA`.
 - **Calibração por componente conhecido** (ideia de 2026-11-12): no assistente de calibração, além de digitar a distância, escolher numa lista de medidas padrão (passo de pinos SOIC 1,27 mm, TSSOP 0,65 mm, QFP 0,5 mm; corpos SMD 0402/0603/0805/1206). Facilita calibrar na altura de componentes altos, sem a lâmina, e torna a medição mais acessível.
 - **Áudio na gravação (decidido em 2026-11-11):** gravar o microfone do notebook junto com o vídeo, para narração. **Desligado por padrão**; o usuário liga por uma opção (interruptor na gravação e/ou Preferências → Vídeo). Indicador visível enquanto o áudio estiver sendo gravado. A definir na hora de implementar: o formato do áudio no MP4 (provavelmente Opus, compatível com o player do sistema) e a escolha do microfone quando houver mais de um.

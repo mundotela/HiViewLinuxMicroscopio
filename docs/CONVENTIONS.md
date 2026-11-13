@@ -124,6 +124,8 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - **Threads externas → UI:** callbacks de worker ou de GStreamer enviam mensagens com `input_sender().send(...)`, **descartando o erro**. Nunca use `sender.input(...)` nesses callbacks: ele entra em pânico se a UI já foi encerrada (bug encontrado no M6, presente desde o M2, que aparecia ao fechar o app com a câmera transmitindo).
 - **A roda do mouse nunca muda o valor de um controle.** `adw::ComboRow`/`GtkDropDown`, `GtkScale` (deslizantes) e `adw::SpinRow`/`GtkSpinButton` mudam de valor com a roda; rolar o painel por cima deles reescrevia a configuração sem o usuário perceber (no M8, o perfil de calibração ativo "sumia" assim). Todo controle desses leva um `EventControllerScroll` em fase capture que engole a roda e repassa o deslocamento ao `ScrolledWindow` ancestral (`measure_ui::swallow_scroll`). Rolar o painel só rola o painel.
 - **Foco do teclado:** os atalhos de uma tecla (G, C, M, Espaço…) não funcionam enquanto um campo editável tem o foco. Depois de qualquer diálogo ou popover fechar, ou quando o usuário termina de editar um campo (Enter ou ponteiro saindo do painel), o foco volta para a viewport. Clicar no vídeo sempre devolve o foco à viewport. Botões que não precisam de foco (seletores de modo, Galeria) usam `focusable=false`.
+- **Relógios: nunca misture domínios.** Timestamps vindos do kernel não são comparáveis com o relógio do app: o usbmon usa CLOCK_REALTIME, o evdev usa CLOCK_MONOTONIC e `glib::monotonic_time`/`Instant` usam CLOCK_MONOTONIC. Use um timestamp externo **só para deltas da mesma fonte** (ex.: soltar − apertar). Timers e prazos no app são agendados pelo relógio de **chegada** (`timeout_add_local_once(duração)`). No M9, a mistura fez o aperto longo nunca disparar.
+- **Avisos de status (toasts) só na mudança de estado.** Compare com o estado anterior no modelo; tentativas repetidas (reconexão, polling) são silenciosas (`debug!`). A primeira detecção também conta como mudança. Cada transição tem uma linha `info!` no log (M9: enxurrada de toasts com o serviço parado).
 - **Critério de aceite de UI:** zero linhas `Gtk-CRITICAL`, `Gdk-CRITICAL` ou `panicked` no log de uma sessão completa de uso.
 
 ---
@@ -178,6 +180,7 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - **Nunca** rode `sudo`, `apt`, `pip install --user` ou qualquer comando que altere o sistema, nem escreva fora da pasta do projeto (exceção: `~/.cargo`, que o próprio cargo gerencia).
 - Se faltar um pacote do sistema, **pare e peça** no chat, informando o comando exato para o Henrique rodar.
 - Acesso ao microscópio (`/dev/video*`) é permitido. Não altere controles V4L2 de forma persistente fora do app.
+- **Código que roda como root** (hoje: `hiview-buttond`, `scripts/install-buttond.sh`, a unit systemd) passa por revisão de segurança da engenharia, **linha a linha, com os arquivos completos**, antes de qualquer `sudo`. Qualquer mudança nesses arquivos exige nova revisão e reinstalação; mudanças só no app não.
 
 ---
 

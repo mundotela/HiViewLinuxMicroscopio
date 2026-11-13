@@ -302,6 +302,19 @@ A interpretação "clique curto/longo" fica no app, não na fonte:
   O parser fica em `hiview-core` (puro, testável).
 - A instalação do helper é **opcional** (pacote/flag separada) e está documentada no manual.
 
+> **Implementado no M9 (2026-11-12).** O que mudou em relação ao plano acima:
+>
+> - **Hotplug sem udev monitor:** com `PrivateNetwork=yes`, os uevents do kernel (netlink) não chegam ao serviço. O daemon reenumera o sysfs (via `udev::Enumerator`) a cada 1,5 s, no máximo uma vez por tick. O `poll(2)` no fd do usbmon continua acordando na hora para o botão.
+> - **Filtro final** (`hiview_core::snap_button_event`): `'C'` + interrupt + `epnum == 0x83` + `busnum`/`devnum` do microscópio + `len_cap == 4` + bytes `02 01 00 0x`.
+> - **Truncamento é normal:** o vídeo do próprio microscópio passa pelo mesmo barramento. O kernel copia `min(len_cap, alloc)` bytes e informa o `len_cap` original. Registros maiores que o buffer (256 B) são descartados em silêncio, sem erro.
+> - **Ring do usbmon de 1 MiB** (`MON_IOCT_RING_SIZE`) e watchdog de perdas (`MON_IOCG_STATS` a cada 60 s; warn só se `dropped > 0`).
+> - **Protocolo do socket:** `PRESSED <ts_us>\n` / `RELEASED <ts_us>\n`. Máximo de 8 clientes. Qualquer erro de escrita derruba o cliente (linha parcial dessincroniza o protocolo).
+> - **Relógios:** o `ts_us` do usbmon é **CLOCK_REALTIME** (`ktime_get_real_ts64` em `mon_bin.c`); o do evdev é CLOCK_MONOTONIC. Ele serve **só para deltas da mesma fonte** (duração apertar→soltar). O timer do aperto longo é agendado pelo relógio de **chegada** no app (`timeout_add_local_once`). Nunca comparar `ts_us` com `glib::monotonic_time`.
+> - **Status:** Preferências → Botão físico → Status ("Conectado via serviço" / "Conectado via driver" / "Não disponível") + toast **só na mudança de estado**, inclusive na primeira conexão. Tentativas de reconexão são silenciosas (debug).
+> - **Unit systemd:** root sem nenhuma capability (`CapabilityBoundingSet=` vazio), `DevicePolicy=closed` + `DeviceAllow=char-usbmon rw`, `RestrictAddressFamilies=AF_UNIX`, `ProtectSystem=strict`, `ProtectHome`, `MemoryDenyWriteExecute`, `SystemCallFilter=@system-service`, `SupplementaryGroups=hiview` (o `chgrp` do socket não precisa de `CAP_CHOWN`). `PrivateDevices` **não** pode ser usado (esconderia `/dev/usbmon*`).
+> - **`unsafe`:** só em `hiview-buttond/src/usbmon_ffi.rs`, 3 blocos (GETX, RING_SIZE, STATS), cada um com `// SAFETY:`. Struct de 64 bytes conferida campo a campo contra `usbmon.rst`.
+> - **Validação física:** curto = foto, longo = grava/para, replug, `systemctl stop/start` com o app aberto, 0 erros no log. O caminho evdev não foi exercido em hardware real (este microscópio não gera `KEY_CAMERA`).
+
 **Caminho de longo prazo (backlog):** enviar um patch ao `linux-media` adicionando um quirk para `05e3:f12a` no `uvcvideo`. Se for aceito, o `EvdevSource` assume e o helper se torna desnecessário.
 
 ### 6.11 Ajustes de imagem (por software)
@@ -400,6 +413,7 @@ O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar n
   - `modules-load.d`;
   - cria o grupo `hiview` e adiciona o usuário a ele (o postinst informa que é preciso fazer logout/login).
 - App ID: `br.com.mundotela.HiView`.
+- **Até o M11**, o serviço do botão é instalado por `scripts/install-buttond.sh` (idempotente, com `--uninstall`). O script **não compila**: o usuário roda `cargo build --release -p hiview-buttond` antes, sem sudo, para não deixar arquivos de root em `target/`. O script recusa rodar sem `sudo` ou num shell root direto e instala em `/usr/local/libexec`, `/etc/systemd/system` e `/etc/modules-load.d`.
 
 ---
 
