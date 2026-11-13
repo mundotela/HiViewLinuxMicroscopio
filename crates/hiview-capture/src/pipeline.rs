@@ -111,6 +111,17 @@ impl CapturePipeline {
         self.dev_node.as_ref()
     }
 
+    /// The pipeline's clock and base time (M10.5, §6.7 A/V sync): the
+    /// recorder shares this clock via `use_clock` and translates video
+    /// frame PTS from this pipeline's running time into its own.
+    /// `None` while the pipeline has not reached `Playing`.
+    #[must_use]
+    pub fn clock_ref(&self) -> Option<crate::ClockRef> {
+        let clock = self.pipeline.clock()?;
+        let base_time = self.pipeline.base_time()?;
+        Some(crate::ClockRef { clock, base_time })
+    }
+
     /// Changes the `videoflip` `video-direction` live (docs/ARCHITECTURE.md
     /// §6.4). No-op while the pipeline element is unavailable.
     pub fn set_orientation(&self, orientation: Orientation) {
