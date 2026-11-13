@@ -24,7 +24,7 @@ use std::sync::mpsc::Sender;
 pub use error::{Error, Result};
 pub use evdev_source::EvdevSource;
 pub use helper::{DEFAULT_SOCKET, HelperSource};
-pub use hiview_core::ButtonEvent;
+pub use hiview_core::{ButtonEdge, ButtonEvent};
 
 /// How the button is currently reaching the app (preferences status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,8 +53,9 @@ pub enum SourceState {
 /// the channel carries this enum instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceUpdate {
-    /// A physical button edge.
-    Event(ButtonEvent),
+    /// A physical button edge, stamped with the device clock (µs) —
+    /// press durations must use it, never delivery time.
+    Event(ButtonEdge),
     /// Transport connectivity changed (kind of the reporting source).
     State(SourceKind, SourceState),
 }

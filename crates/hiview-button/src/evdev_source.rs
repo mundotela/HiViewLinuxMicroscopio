@@ -18,7 +18,7 @@ use std::time::Duration;
 use tracing::{info, warn};
 
 use crate::error::{Error, Result};
-use crate::{ButtonEvent, ButtonSource, SourceKind, SourceState, SourceUpdate};
+use crate::{ButtonEdge, ButtonEvent, ButtonSource, SourceKind, SourceState, SourceUpdate};
 
 /// An input device that emits `KEY_CAMERA` on the camera's USB port.
 pub struct EvdevSource {
@@ -132,13 +132,20 @@ fn read_events(mut device: evdev::Device, tx: &Sender<SourceUpdate>) -> bool {
             {
                 continue;
             }
-            let update = match event.value() {
-                1 => SourceUpdate::Event(ButtonEvent::Pressed),
-                0 => SourceUpdate::Event(ButtonEvent::Released),
+            let kind = match event.value() {
+                1 => ButtonEvent::Pressed,
+                0 => ButtonEvent::Released,
                 // 2 = autorepeat — never an edge.
                 _ => continue,
             };
-            if !send(tx, update) {
+            // The kernel stamps input events on CLOCK_MONOTONIC — the
+            // same domain as the usbmon header and glib::monotonic_time.
+            let ts_us = event
+                .timestamp()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| u64::try_from(d.as_micros()).unwrap_or(0))
+                .unwrap_or(0);
+            if !send(tx, SourceUpdate::Event(ButtonEdge { event: kind, ts_us })) {
                 return false;
             }
         }

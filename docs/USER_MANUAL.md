@@ -61,6 +61,7 @@ Depois, procure **HiView** no menu de aplicativos.
 O sistema Linux atual não reconhece o botão Snap deste microscópio sozinho. Um pequeno serviço opcional, o `hiview-buttond`, resolve isso. Para instalar, rode dentro da pasta do projeto:
 
 ```bash
+cargo build --release -p hiview-buttond
 sudo ./scripts/install-buttond.sh
 ```
 

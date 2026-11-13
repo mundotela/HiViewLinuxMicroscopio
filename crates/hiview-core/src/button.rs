@@ -22,6 +22,27 @@ pub enum ButtonEvent {
     Released,
 }
 
+/// A [`ButtonEvent`] stamped by the device-side clock (µs,
+/// `CLOCK_MONOTONIC` — the same domain as `glib::monotonic_time`, the
+/// usbmon header and evdev timestamps). Press durations must be
+/// computed from `ts_us`, never from arrival time: delivery batching
+/// and reconnects must not distort the measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ButtonEdge {
+    /// Which edge happened.
+    pub event: ButtonEvent,
+    /// Device/kernel timestamp, microseconds (monotonic).
+    pub ts_us: u64,
+}
+
+impl ButtonEdge {
+    /// The timestamp in milliseconds, the unit [`ButtonTracker`] uses.
+    #[must_use]
+    pub fn ts_ms(&self) -> u64 {
+        self.ts_us / 1_000
+    }
+}
+
 /// usbmon event type: URB callback (completion). Only completions carry
 /// the payload read back from the device.
 pub const EVENT_COMPLETE: u8 = b'C';
@@ -63,6 +84,9 @@ pub struct UsbmonRecord<'a> {
     pub len_cap: u32,
     /// The captured payload (`len_cap` bytes at most).
     pub data: &'a [u8],
+    /// Event timestamp from the header, microseconds (monotonic) —
+    /// `ts_sec * 1_000_000 + ts_usec` computed by the caller.
+    pub ts_us: i64,
 }
 
 /// The §6.10 filter: a completion record on the microscope's interrupt
@@ -224,6 +248,7 @@ mod tests {
             busnum: BUS,
             len_cap: data.len() as u32,
             data,
+            ts_us: 0,
         }
     }
 

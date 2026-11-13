@@ -2,16 +2,19 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # HiView — instalador do daemon do botão Snap (docs/ARCHITECTURE.md §6.10).
 #
-# Uso:   sudo ./scripts/install-buttond.sh           instala e ativa
+# Uso:   cargo build --release -p hiview-buttond     (como usuário normal)
+#        sudo ./scripts/install-buttond.sh           instala e ativa
 #        sudo ./scripts/install-buttond.sh --uninstall   reverte tudo
 #
 # Idempotente: cada etapa verifica antes de agir e pode ser repetida.
+# O script NÃO compila: um build via sudo deixaria target/ com dono root.
 
 set -euo pipefail
 
 BIN_NAME="hiview-buttond"
 UNIT_NAME="hiview-buttond.service"
 GROUP="hiview"
+BIN_SRC="target/release/$BIN_NAME"
 BIN_DST="/usr/local/libexec/$BIN_NAME"
 UNIT_DST="/etc/systemd/system/$UNIT_NAME"
 MODLOAD_DST="/etc/modules-load.d/hiview.conf"
@@ -23,32 +26,37 @@ MODLOAD_SRC="$ROOT/data/modules-load.d/hiview.conf"
 say() { printf '» %s\n' "$*"; }
 ok() { printf '  ✓ %s\n' "$*"; }
 
-# Usuário real que invocou o sudo (fallback: usuário atual).
-CALLER="${SUDO_USER:-$USER}"
-
-require_root() {
+# Apenas via `sudo` a partir de uma sessão de usuário: recusa um shell
+# root direto (não haveria usuário para receber o grupo) e nunca
+# adiciona o próprio root ao grupo.
+require_invocation() {
     if [[ $EUID -ne 0 ]]; then
-        say "Este script precisa de root. Rode: sudo $0 $*"
+        say "Este script precisa de root. Rode: sudo $0 ${1:-}"
+        exit 1
+    fi
+    if [[ -z ${SUDO_USER:-} || $SUDO_USER == root ]]; then
+        say "Rode 'sudo $0' a partir do seu usuário de sessão — nunca"
+        say "num shell root direto (o grupo '$GROUP' precisa receber o"
+        say "usuário que usa o HiView, e root nunca entra nele)."
         exit 1
     fi
 }
 
-# Compila o daemon como o usuário invocador para que target/ não fique
-# com arquivos pertencentes ao root.
-build_daemon() {
-    say "Compilando $BIN_NAME (release)…"
-    if [[ -n ${SUDO_USER:-} && $SUDO_USER != root ]]; then
-        sudo -u "$SUDO_USER" -- cargo build --release -p "$BIN_NAME" \
-            --manifest-path "$ROOT/Cargo.toml"
-    else
-        cargo build --release -p "$BIN_NAME" --manifest-path "$ROOT/Cargo.toml"
+# O binário é compilado pelo usuário, não dentro deste script.
+require_binary() {
+    if [[ ! -x $ROOT/$BIN_SRC ]]; then
+        say "Binário ausente: $ROOT/$BIN_SRC"
+        say "Compile antes, como o seu usuário normal:"
+        say "    cargo build --release -p $BIN_NAME"
+        exit 1
     fi
-    ok "binário pronto em $ROOT/target/release/$BIN_NAME"
 }
+
+CALLER="$SUDO_USER"
 
 install_files() {
     say "Instalando binário em $BIN_DST…"
-    install -D -m 0755 "$ROOT/target/release/$BIN_NAME" "$BIN_DST"
+    install -D -m 0755 "$ROOT/$BIN_SRC" "$BIN_DST"
     ok "binário instalado"
 
     say "Instalando unit $UNIT_NAME…"
@@ -69,17 +77,12 @@ setup_group() {
         ok "grupo criado"
     fi
 
-    if [[ -n ${CALLER:-} && $CALLER != root ]]; then
-        if id -nG "$CALLER" | tr ' ' '\n' | grep -qx "$GROUP"; then
-            ok "$CALLER já pertence ao grupo '$GROUP'"
-        else
-            say "Adicionando $CALLER ao grupo '$GROUP'…"
-            usermod -aG "$GROUP" "$CALLER"
-            ok "usuário adicionado — faça logout/login para valer"
-        fi
+    if id -nG "$CALLER" | tr ' ' '\n' | grep -qx "$GROUP"; then
+        ok "$CALLER já pertence ao grupo '$GROUP'"
     else
-        say "AVISO: não identifiquei o usuário invocador; adicione-o ao"
-        say "       grupo manualmente:  sudo usermod -aG $GROUP <usuário>"
+        say "Adicionando $CALLER ao grupo '$GROUP'…"
+        usermod -aG "$GROUP" "$CALLER"
+        ok "usuário adicionado — faça logout/login para valer"
     fi
 }
 
@@ -113,8 +116,7 @@ uninstall() {
     rm -f "$UNIT_DST" "$MODLOAD_DST" "$BIN_DST"
     ok "unit, modules-load e binário removidos"
 
-    if [[ -n ${CALLER:-} && $CALLER != root ]] \
-        && id -nG "$CALLER" 2>/dev/null | tr ' ' '\n' | grep -qx "$GROUP"; then
+    if id -nG "$CALLER" 2>/dev/null | tr ' ' '\n' | grep -qx "$GROUP"; then
         say "Removendo $CALLER do grupo '$GROUP'…"
         gpasswd -d "$CALLER" "$GROUP" >/dev/null
         ok "usuário removido do grupo"
@@ -138,8 +140,8 @@ uninstall() {
 
 case "${1:-install}" in
     install)
-        require_root
-        build_daemon
+        require_invocation "$@"
+        require_binary
         install_files
         setup_group
         load_module
@@ -147,7 +149,7 @@ case "${1:-install}" in
         say "Pronto! Faça logout/login para o grupo valer, depois abra o HiView."
         ;;
     --uninstall | uninstall)
-        require_root
+        require_invocation "$@"
         uninstall
         ;;
     *)

@@ -37,18 +37,21 @@ RuntimeDirectoryMode=0755
 UMask=0077
 
 # --- Devices ------------------------------------------------------
-# DeviceAllow hides every device except the usbmon readers. NOTE:
-# PrivateDevices=yes would hide /dev/usbmon* too (private namespace
-# contains only pseudo-devices), so it must NOT be set.
+# DeviceAllow hides every device except the usbmon readers. `char-`
+# selects the driver class from /proc/devices (usbmon registers major
+# 180); DeviceAllow does NOT accept path globs like /dev/usbmon*.
+# NOTE: PrivateDevices=yes would hide /dev/usbmon* too (private
+# namespace contains only pseudo-devices), so it must NOT be set.
 DevicePolicy=closed
-DeviceAllow=/dev/usbmon* rw
+DeviceAllow=char-usbmon rw
 
 # --- Network ------------------------------------------------------
 # The daemon has no network code at all; the unix socket works inside
-# a private network namespace, and udev hotplug uses netlink — not a
-# network interface.
+# a private network namespace. Hotplug is handled by periodic sysfs
+# re-enumeration — kernel uevents (netlink) cannot cross a private
+# netns anyway — so even AF_NETLINK stays blocked.
 PrivateNetwork=yes
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+RestrictAddressFamilies=AF_UNIX
 
 # --- Kernel surface -----------------------------------------------
 ProtectKernelTunables=yes

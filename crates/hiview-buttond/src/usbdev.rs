@@ -6,8 +6,6 @@
 //! The matching logic is pure — the udev glue is thin and isolated so
 //! the hotplug rules can be tested with fake device lists.
 
-use udev::EventType;
-
 /// The microscope USB descriptor (ARCHITECTURE §2.1 / §6.1).
 pub const MICROSCOPE_VID: u16 = 0x05e3;
 pub const MICROSCOPE_PID: u16 = 0xf12a;
@@ -85,32 +83,11 @@ fn attr_dec<T: std::str::FromStr>(dev: &udev::Device, name: &str) -> Option<T> {
     attr(dev, name)?.parse().ok()
 }
 
-/// Runs `on_usb_event` whenever the usb subsystem gains/loses a node —
-/// the caller re-runs `resolve` to pick up the new devnum. `on_usb_event`
-/// runs on the monitor thread (keep it cheap: set a flag / send on a
-/// channel).
-pub fn watch_hotplug(on_usb_event: impl Fn() + Send + 'static) {
-    std::thread::Builder::new()
-        .name("hiview-udev".into())
-        .spawn(move || {
-            let Ok(builder) = udev::MonitorBuilder::new().and_then(|b| b.match_subsystem("usb"))
-            else {
-                tracing::error!("udev monitor unavailable — hotplug tracking disabled");
-                return;
-            };
-            let Ok(monitor) = builder.listen() else {
-                tracing::error!("udev monitor listen failed — hotplug tracking disabled");
-                return;
-            };
-            for event in monitor.iter() {
-                if matches!(event.event_type(), EventType::Add | EventType::Remove) {
-                    on_usb_event();
-                }
-            }
-        })
-        .map(|_| ())
-        .unwrap_or_else(|e| tracing::error!("udev monitor thread: {e}"));
-}
+// NOTE: there is intentionally no udev *monitor* here — the unit runs
+// under `PrivateNetwork=yes`, so kernel uevents
+// (`NETLINK_KOBJECT_UEVENT`) never reach a netlink socket inside the
+// private namespace. `reader` re-enumerates sysfs on a tick instead,
+// which is the only reliable hotplug signal in this sandbox.
 
 #[cfg(test)]
 mod tests {

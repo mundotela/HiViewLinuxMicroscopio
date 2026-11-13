@@ -3,9 +3,10 @@
 #![forbid(unsafe_code)]
 
 //! Unix-socket publisher: `/run/hiview/button.sock`, mode 0660, group
-//! `hiview`. The ONLY bytes ever written are `"PRESSED\n"` and
-//! `"RELEASED\n"` — the daemon's privacy contract (no USB payload
-//! ever leaves this process).
+//! `hiview`. The ONLY bytes ever written are `"PRESSED <ts_us>\n"` and
+//! `"RELEASED <ts_us>\n"` — the daemon's privacy contract (no USB
+//! payload ever leaves this process). The `ts_us` is the device clock
+//! from the usbmon header so press durations survive delivery batching.
 
 use std::fs;
 use std::io::Write;
@@ -17,22 +18,24 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use hiview_core::ButtonEvent;
+use hiview_core::{ButtonEdge, ButtonEvent};
 
 /// The on-the-wire contract consumed by `hiview-button`'s
-/// `HelperSource`. Keep in sync — app and daemon version together.
-pub fn wire_line(event: ButtonEvent) -> &'static [u8] {
-    match event {
-        ButtonEvent::Pressed => b"PRESSED\n",
-        ButtonEvent::Released => b"RELEASED\n",
-    }
+/// `HelperSource` — `"PRESSED <ts_us>\n"` / `"RELEASED <ts_us>\n"`.
+/// Keep in sync: app and daemon version together.
+pub fn wire_line(edge: &ButtonEdge) -> String {
+    let tag = match edge.event {
+        ButtonEvent::Pressed => "PRESSED",
+        ButtonEvent::Released => "RELEASED",
+    };
+    format!("{tag} {}\n", edge.ts_us)
 }
 
 /// Binds `path` (removing a stale socket), sets 0660 + group, accepts
-/// clients, and broadcasts every [`ButtonEvent`] from `rx` to all of
+/// clients, and broadcasts every [`ButtonEdge`] from `rx` to all of
 /// them. Runs until `rx` disconnects; an `Err` return means the
 /// listener itself is broken — the daemon exits and systemd logs it.
-pub fn serve(path: &Path, group: Option<&str>, rx: &Receiver<ButtonEvent>) -> anyhow::Result<()> {
+pub fn serve(path: &Path, group: Option<&str>, rx: &Receiver<ButtonEdge>) -> anyhow::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -71,7 +74,7 @@ pub fn serve(path: &Path, group: Option<&str>, rx: &Receiver<ButtonEvent>) -> an
             clients.push(client);
         }
         match rx.recv_timeout(Duration::from_millis(200)) {
-            Ok(event) => broadcast(&mut clients, wire_line(event)),
+            Ok(edge) => broadcast(&mut clients, wire_line(&edge).as_bytes()),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                 bail!("event channel closed")
@@ -116,18 +119,22 @@ mod tests {
     /// Sends events to a `serve` running in a temp dir; returns the
     /// sender + socket path.
     fn spawn_server() -> (
-        std::sync::mpsc::Sender<ButtonEvent>,
+        std::sync::mpsc::Sender<ButtonEdge>,
         TempDir,
         std::path::PathBuf,
     ) {
         let dir = TempDir::new().unwrap_or_else(|e| panic!("tempdir: {e}"));
         let path = dir.path().join("button.sock");
-        let (tx, rx) = channel::<ButtonEvent>();
+        let (tx, rx) = channel::<ButtonEdge>();
         let serve_path = path.clone();
         thread::spawn(move || {
             let _ = serve(&serve_path, None, &rx);
         });
         (tx, dir, path)
+    }
+
+    fn edge(event: ButtonEvent, ts_us: u64) -> ButtonEdge {
+        ButtonEdge { event, ts_us }
     }
 
     /// Waits until `serve` has bound the socket.
@@ -170,21 +177,25 @@ mod tests {
     fn pressed_is_written_verbatim() {
         let (tx, _dir, sock) = spawn_server();
         let mut s = connect(&sock);
-        tx.send(ButtonEvent::Pressed)
+        tx.send(edge(ButtonEvent::Pressed, 12_345_678))
             .unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(read_until(&mut s, b"PRESSED\n"), b"PRESSED\n");
+        assert_eq!(
+            read_until(&mut s, b"PRESSED 12345678\n"),
+            b"PRESSED 12345678\n",
+            "the wire line is TAG <device ts_us>"
+        );
     }
 
     #[test]
     fn both_edges_and_only_the_contract() {
         let (tx, _dir, sock) = spawn_server();
         let mut s = connect(&sock);
-        tx.send(ButtonEvent::Pressed)
+        tx.send(edge(ButtonEvent::Pressed, 100))
             .unwrap_or_else(|e| panic!("{e}"));
-        tx.send(ButtonEvent::Released)
+        tx.send(edge(ButtonEvent::Released, 800))
             .unwrap_or_else(|e| panic!("{e}"));
-        let got = read_until(&mut s, b"RELEASED\n");
-        assert_eq!(got, b"PRESSED\nRELEASED\n");
+        let got = read_until(&mut s, b"RELEASED 800\n");
+        assert_eq!(got, b"PRESSED 100\nRELEASED 800\n");
     }
 
     #[test]
@@ -206,11 +217,14 @@ mod tests {
         dead.shutdown(Shutdown::Both).ok();
         drop(dead);
         let mut live = connect(&sock);
-        tx.send(ButtonEvent::Pressed)
+        tx.send(edge(ButtonEvent::Pressed, 1))
             .unwrap_or_else(|e| panic!("{e}"));
-        tx.send(ButtonEvent::Released)
+        tx.send(edge(ButtonEvent::Released, 2))
             .unwrap_or_else(|e| panic!("{e}"));
         // The live client still receives — the dead one was pruned.
-        assert_eq!(read_until(&mut live, b"RELEASED\n"), b"PRESSED\nRELEASED\n");
+        assert_eq!(
+            read_until(&mut live, b"RELEASED 2\n"),
+            b"PRESSED 1\nRELEASED 2\n"
+        );
     }
 }

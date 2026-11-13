@@ -117,6 +117,8 @@ pub fn fetch_event(fd: BorrowedFd<'_>, data: &mut Vec<u8>) -> Result<UsbmonPacke
 
 /// Maps a raw header + payload onto the pure filter record
 /// (hiview-core does the matching; this crate owns only the ABI).
+/// `ts_us` folds the header's `ts_sec`/`ts_usec` — the DEVICE clock,
+/// forwarded so press durations never depend on delivery latency.
 pub fn record_of<'a>(packet: &UsbmonPacket, data: &'a [u8]) -> hiview_core::UsbmonRecord<'a> {
     hiview_core::UsbmonRecord {
         event_type: packet.event_type,
@@ -126,5 +128,9 @@ pub fn record_of<'a>(packet: &UsbmonPacket, data: &'a [u8]) -> hiview_core::Usbm
         busnum: packet.busnum,
         len_cap: packet.len_cap,
         data,
+        ts_us: packet
+            .ts_sec
+            .saturating_mul(1_000_000)
+            .saturating_add(i64::from(packet.ts_usec)),
     }
 }

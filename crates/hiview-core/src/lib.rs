@@ -25,8 +25,8 @@ pub use adjust::{
     SHARPEN_RANGE, digits_of, range_of, step_of,
 };
 pub use button::{
-    ButtonEvent, ButtonTracker, EVENT_COMPLETE, PressOutcome, ReleaseOutcome, SNAP_EPNUM,
-    UsbmonRecord, XFER_INTERRUPT, parse_status_packet, snap_button_event,
+    ButtonEdge, ButtonEvent, ButtonTracker, EVENT_COMPLETE, PressOutcome, ReleaseOutcome,
+    SNAP_EPNUM, UsbmonRecord, XFER_INTERRUPT, parse_status_packet, snap_button_event,
 };
 pub use config::{
     AppConfig, ButtonConfig, ConfigLoad, PhotoConfig, config_path, load_config, save_config,

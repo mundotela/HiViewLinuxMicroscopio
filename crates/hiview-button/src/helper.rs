@@ -3,10 +3,12 @@
 
 //! [`HelperSource`]: client of the `hiview-buttond` Unix socket.
 //!
-//! The daemon publishes only `PRESSED\n` / `RELEASED\n` lines
-//! (docs/ARCHITECTURE.md §6.10). The source reconnects automatically:
-//! if the daemon restarts — or is installed while the app is already
-//! running — the button starts working without touching the app.
+//! The daemon publishes only `PRESSED <ts_us>\n` / `RELEASED <ts_us>\n`
+//! lines (docs/ARCHITECTURE.md §6.10): the device clock in µs, so the
+//! press duration survives delivery batching. The source reconnects
+//! automatically: if the daemon restarts — or is installed while the
+//! app is already running — the button starts working without
+//! touching the app.
 
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
@@ -18,7 +20,7 @@ use std::time::Duration;
 use tracing::info;
 
 use crate::error::{Error, Result};
-use crate::{ButtonEvent, ButtonSource, SourceKind, SourceState, SourceUpdate};
+use crate::{ButtonEdge, ButtonEvent, ButtonSource, SourceKind, SourceState, SourceUpdate};
 
 /// Socket path published by `hiview-buttond` (§6.10).
 pub const DEFAULT_SOCKET: &str = "/run/hiview/button.sock";
@@ -107,19 +109,28 @@ fn connect_and_read(path: &Path, tx: &Sender<SourceUpdate>) -> ReadEnd {
         let Ok(line) = line else {
             return ReadEnd::Lost;
         };
-        let event = match line.trim() {
-            "PRESSED" => Some(ButtonEvent::Pressed),
-            "RELEASED" => Some(ButtonEvent::Released),
-            // Anything else on the wire is ignored, never forwarded.
-            _ => None,
-        };
-        if let Some(event) = event
-            && !send(tx, SourceUpdate::Event(event))
+        if let Some(edge) = parse_line(&line)
+            && !send(tx, SourceUpdate::Event(edge))
         {
             return ReadEnd::ChannelClosed;
         }
     }
     ReadEnd::Lost
+}
+
+/// `"PRESSED <ts_us>"` / `"RELEASED <ts_us>"` — strict contract;
+/// anything else on the wire is ignored, never forwarded.
+fn parse_line(line: &str) -> Option<ButtonEdge> {
+    let (tag, ts) = line.trim().split_once(' ')?;
+    let event = match tag {
+        "PRESSED" => ButtonEvent::Pressed,
+        "RELEASED" => ButtonEvent::Released,
+        _ => return None,
+    };
+    Some(ButtonEdge {
+        event,
+        ts_us: ts.parse().ok()?,
+    })
 }
 
 /// mpsc send that never panics: a dead UI ends the source.
@@ -248,15 +259,21 @@ mod tests {
             .unwrap_or_else(|e| panic!("start: {e}"));
 
         assert!(is_connected(&wait_for(&rx, is_connected)));
-        daemon.write("PRESSED");
+        daemon.write("PRESSED 1000");
         assert_eq!(
             wait_for(&rx, |u| matches!(u, SourceUpdate::Event(_))),
-            SourceUpdate::Event(ButtonEvent::Pressed)
+            SourceUpdate::Event(ButtonEdge {
+                event: ButtonEvent::Pressed,
+                ts_us: 1000,
+            })
         );
-        daemon.write("RELEASED");
+        daemon.write("RELEASED 1700");
         assert_eq!(
             wait_for(&rx, |u| matches!(u, SourceUpdate::Event(_))),
-            SourceUpdate::Event(ButtonEvent::Released)
+            SourceUpdate::Event(ButtonEdge {
+                event: ButtonEvent::Released,
+                ts_us: 1700,
+            })
         );
         daemon.crash();
     }
@@ -274,11 +291,16 @@ mod tests {
         wait_for(&rx, is_connected);
 
         daemon.write("KEYBOARD_DUMP aabbc");
-        daemon.write("PRESSED");
+        daemon.write("PRESSED"); // missing timestamp — off contract
+        daemon.write("PRESSED not_a_number");
+        daemon.write("PRESSED 42");
         assert_eq!(
             wait_for(&rx, |u| matches!(u, SourceUpdate::Event(_))),
-            SourceUpdate::Event(ButtonEvent::Pressed),
-            "the first Event after garbage must be the press"
+            SourceUpdate::Event(ButtonEdge {
+                event: ButtonEvent::Pressed,
+                ts_us: 42,
+            }),
+            "the first Event after garbage must be the well-formed press"
         );
         daemon.crash();
     }
@@ -297,7 +319,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("start: {e}"));
         wait_for(&rx, is_connected);
 
-        daemon.write("PRESSED");
+        daemon.write("PRESSED 7");
         wait_for(&rx, |u| matches!(u, SourceUpdate::Event(_)));
 
         daemon.crash();
@@ -315,10 +337,13 @@ mod tests {
             is_connected(&wait_for(&rx, is_connected)),
             "client must reconnect without the app doing anything"
         );
-        daemon2.write("RELEASED");
+        daemon2.write("RELEASED 9");
         assert_eq!(
             wait_for(&rx, |u| matches!(u, SourceUpdate::Event(_))),
-            SourceUpdate::Event(ButtonEvent::Released)
+            SourceUpdate::Event(ButtonEdge {
+                event: ButtonEvent::Released,
+                ts_us: 9,
+            })
         );
         daemon2.crash();
     }

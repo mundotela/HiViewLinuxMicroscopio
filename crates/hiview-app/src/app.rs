@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use hiview_button::{ButtonEvent, SourceKind, SourceState, SourceUpdate, pick_source};
+use hiview_button::{ButtonEdge, ButtonEvent, SourceKind, SourceState, SourceUpdate, pick_source};
 use hiview_capture::{
     CameraDescriptor, CameraEvent, CameraState, RecordDenied, RecordStop, Recorder,
     check_disk_space,
@@ -1566,7 +1566,7 @@ impl SimpleComponent for AppModel {
                     self.button_tracker.reset();
                     self.sync_button_status_row();
                 }
-                SourceUpdate::Event(event) => self.on_button_edge(event, &sender),
+                SourceUpdate::Event(edge) => self.on_button_edge(edge, &sender),
             },
             Input::ButtonLongDeadline => {
                 if self.button_tracker.fire_long(now_ms()) {
@@ -1661,16 +1661,18 @@ impl AppModel {
         }
     }
 
-    /// A Snap edge arrived — interpret it via the tracker (§6.10):
-    /// `Pressed` arms the long-deadline timer, `Released` before the
-    /// deadline is a photo press, a still-held button at the deadline
-    /// toggles recording.
-    fn on_button_edge(&mut self, event: ButtonEvent, sender: &ComponentSender<Self>) {
-        match event {
+    /// A Snap edge arrived — interpret it via the tracker (§6:10).
+    /// Timestamps come from the DEVICE clock (`edge.ts_ms`): a
+    /// PRESSED/RELEASED pair delivered in the same batch still measures
+    /// the real hold duration.
+    fn on_button_edge(&mut self, edge: ButtonEdge, sender: &ComponentSender<Self>) {
+        match edge.event {
             ButtonEvent::Pressed => {
-                if self.button_tracker.press(now_ms()) == PressOutcome::Accepted
+                if self.button_tracker.press(edge.ts_ms()) == PressOutcome::Accepted
                     && let Some(deadline) = self.button_tracker.long_deadline()
                 {
+                    // `deadline` and `now_ms()` are the same monotonic
+                    // clock domain as the device timestamp.
                     let wait = deadline.saturating_sub(now_ms()).max(1);
                     let sender = sender.clone();
                     glib::timeout_add_local_once(Duration::from_millis(wait), move || {
@@ -1679,7 +1681,7 @@ impl AppModel {
                 }
             }
             ButtonEvent::Released => {
-                if self.button_tracker.release(now_ms()) == ReleaseOutcome::Short {
+                if self.button_tracker.release(edge.ts_ms()) == ReleaseOutcome::Short {
                     self.take_photo();
                 }
             }
