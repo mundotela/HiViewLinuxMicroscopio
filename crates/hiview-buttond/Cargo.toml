@@ -5,11 +5,18 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Privileged helper daemon that publishes Snap button events"
+description = "HiView Snap button daemon (usbmon → unix socket)"
 
 [lints]
 workspace = true
 
 [dependencies]
+hiview-core.workspace = true
+udev.workspace = true
+nix.workspace = true
+anyhow.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+
+[dev-dependencies]
+tempfile.workspace = true
