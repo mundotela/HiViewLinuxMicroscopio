@@ -1563,15 +1563,22 @@ impl SimpleComponent for AppModel {
             }
             Input::ButtonUpdate(update) => match update {
                 SourceUpdate::State(kind, SourceState::Connected) => {
-                    self.button_status = Some(kind);
-                    self.sync_button_status_row();
-                    self.show_toast(adw::Toast::new(&strings::button_connected_toast(kind)));
+                    // Toast on TRANSITIONS only: the first connect
+                    // (None → kind) counts, repeats do not — a source
+                    // may re-report while recovering from a drop.
+                    if self.button_status != Some(kind) {
+                        self.button_status = Some(kind);
+                        self.sync_button_status_row();
+                        self.show_toast(adw::Toast::new(&strings::button_connected_toast(kind)));
+                    }
                 }
                 SourceUpdate::State(_, SourceState::Disconnected) => {
-                    self.button_status = None;
                     self.button_tracker.reset();
-                    self.sync_button_status_row();
-                    self.show_toast(adw::Toast::new(strings::BUTTON_DISCONNECTED_TOAST));
+                    if self.button_status.is_some() {
+                        self.button_status = None;
+                        self.sync_button_status_row();
+                        self.show_toast(adw::Toast::new(strings::BUTTON_DISCONNECTED_TOAST));
+                    }
                 }
                 SourceUpdate::Event(edge) => self.on_button_edge(edge, &sender),
             },

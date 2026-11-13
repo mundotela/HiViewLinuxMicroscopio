@@ -88,9 +88,10 @@ fn expected_phys_prefix(id_path: &str) -> Option<String> {
 }
 
 /// Blocking read loop for the device (own thread). Reports Connected
-/// once open and Disconnected if the node goes away (unplug); the
-/// app re-probes on camera events.
+/// once open and Disconnected only when a live session drops — failed
+/// retries stay quiet so the app is not flooded (see `helper.rs`).
 fn pump(path: &std::path::Path, tx: &Sender<SourceUpdate>) {
+    let mut connected = false;
     loop {
         match evdev::Device::open(path) {
             Ok(device) => {
@@ -101,19 +102,30 @@ fn pump(path: &std::path::Path, tx: &Sender<SourceUpdate>) {
                 ) {
                     return;
                 }
+                connected = true;
                 if !read_events(device, tx) {
                     return;
                 }
             }
             Err(err) => {
-                warn!("snap button: cannot open {}: {err}", path.display());
+                // A live device vanishing is a warn; a persistently
+                // unreadable node is routine retry noise.
+                if connected {
+                    warn!("snap button: cannot open {}: {err}", path.display());
+                } else {
+                    tracing::debug!("snap button: {} not readable: {err}", path.display());
+                }
             }
         }
-        if !send(
-            tx,
-            SourceUpdate::State(SourceKind::Evdev, SourceState::Disconnected),
-        ) {
-            return;
+        if connected {
+            info!("snap button: evdev device lost, retrying");
+            connected = false;
+            if !send(
+                tx,
+                SourceUpdate::State(SourceKind::Evdev, SourceState::Disconnected),
+            ) {
+                return;
+            }
         }
         thread::sleep(Duration::from_millis(500));
     }

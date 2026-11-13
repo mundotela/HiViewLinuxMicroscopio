@@ -63,17 +63,26 @@ impl ButtonSource for HelperSource {
 }
 
 /// Reconnect loop: read events until the socket drops, sleep, retry.
-/// Exits only when the UI channel is gone (app shutting down).
+/// `State` is emitted ONLY on transitions — a stopped daemon must not
+/// flood the app once per retry (the app toasts each update). Exits
+/// only when the UI channel is gone (app shutting down).
 fn pump(path: &Path, tx: &Sender<SourceUpdate>) {
+    let mut connected = false;
     loop {
-        match connect_and_read(path, tx) {
+        match connect_and_read(path, tx, &mut connected) {
             ReadEnd::ChannelClosed => return,
             ReadEnd::Lost => {
-                if !send(
-                    tx,
-                    SourceUpdate::State(SourceKind::Helper, SourceState::Disconnected),
-                ) {
-                    return;
+                if connected {
+                    // The actual transition — log it once; a silent
+                    // retry loop follows until the daemon returns.
+                    info!("snap button: helper socket lost, retrying");
+                    connected = false;
+                    if !send(
+                        tx,
+                        SourceUpdate::State(SourceKind::Helper, SourceState::Disconnected),
+                    ) {
+                        return;
+                    }
                 }
             }
         }
@@ -89,8 +98,9 @@ enum ReadEnd {
 }
 
 /// One socket session: connect, announce `Connected`, forward events
-/// until EOF or error.
-fn connect_and_read(path: &Path, tx: &Sender<SourceUpdate>) -> ReadEnd {
+/// until EOF or error. `connected` is set once the app was told — it
+/// is what makes the later `Disconnected` a real transition.
+fn connect_and_read(path: &Path, tx: &Sender<SourceUpdate>, connected: &mut bool) -> ReadEnd {
     let stream = match UnixStream::connect(path) {
         Ok(s) => s,
         Err(err) => {
@@ -107,6 +117,7 @@ fn connect_and_read(path: &Path, tx: &Sender<SourceUpdate>) -> ReadEnd {
     ) {
         return ReadEnd::ChannelClosed;
     }
+    *connected = true;
 
     let reader = BufReader::new(stream);
     for line in reader.lines() {
@@ -366,5 +377,78 @@ mod tests {
         let daemon = FakeDaemon::start(&path);
         assert!(is_connected(&wait_for(&rx, is_connected)));
         daemon.crash();
+    }
+
+    /// Asserts silence on `rx` for `dur` — used after a transition to
+    /// prove no repeated `State` leaks out per retry.
+    fn assert_silent(rx: &Receiver<SourceUpdate>, dur: Duration) {
+        let deadline = std::time::Instant::now() + dur;
+        while std::time::Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Err(_) => {}
+                Ok(u) => panic!("unexpected extra update after transition: {u:?}"),
+            }
+        }
+    }
+
+    /// M9 round-4 bug: with the service stopped, `Disconnected` was
+    /// emitted once per retry → one toast per second. The transition
+    /// must fire EXACTLY once, then silence while retries continue.
+    #[test]
+    fn lost_daemon_reports_disconnected_once() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let daemon = FakeDaemon::start(&dir.path().join("button.sock"));
+        let (tx, rx) = channel();
+        Box::new(HelperSource::new(daemon.path.clone()))
+            .start(tx)
+            .unwrap_or_else(|e| panic!("start: {e}"));
+        wait_for(&rx, is_connected);
+
+        daemon.crash();
+        assert_eq!(
+            wait_for(&rx, |u| matches!(
+                u,
+                SourceUpdate::State(_, SourceState::Disconnected)
+            )),
+            SourceUpdate::State(SourceKind::Helper, SourceState::Disconnected)
+        );
+        // ~3 retry intervals of failed reconnects: no repeats.
+        assert_silent(&rx, Duration::from_millis(3_500));
+    }
+
+    /// A daemon that was never reachable emits NOTHING — the app
+    /// already starts with status "não disponível"; a per-retry
+    /// `Disconnected` would be a toast storm from zero.
+    #[test]
+    fn never_connected_daemon_is_silent() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let (tx, rx) = channel();
+        Box::new(HelperSource::new(dir.path().join("button.sock")))
+            .start(tx)
+            .unwrap_or_else(|e| panic!("start: {e}"));
+        assert_silent(&rx, Duration::from_millis(3_500));
+    }
+
+    /// And the recovery transition fires Connected exactly once.
+    #[test]
+    fn reconnect_reports_connected_once() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let path = dir.path().join("button.sock");
+        let daemon = FakeDaemon::start(&path);
+        let (tx, rx) = channel();
+        Box::new(HelperSource::new(path.clone()))
+            .start(tx)
+            .unwrap_or_else(|e| panic!("start: {e}"));
+        wait_for(&rx, is_connected);
+        daemon.crash();
+        wait_for(&rx, |u| {
+            matches!(u, SourceUpdate::State(_, SourceState::Disconnected))
+        });
+
+        let daemon2 = FakeDaemon::start(&path);
+        assert!(is_connected(&wait_for(&rx, is_connected)));
+        // Connected, then silence — no repeated transitions while idle.
+        assert_silent(&rx, Duration::from_millis(2_500));
+        daemon2.crash();
     }
 }
