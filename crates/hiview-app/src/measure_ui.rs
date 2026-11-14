@@ -198,6 +198,7 @@ pub fn sync(
     panel: &mut MeasurePanel,
     measure: &MeasureSet,
     config: &AppConfig,
+    device: &str,
     sink: &Rc<dyn Fn(Input)>,
 ) {
     let tool_index = match measure.armed_tool() {
@@ -220,15 +221,17 @@ pub fn sync(
         panel.calibrate_row.set_subtitle("");
     }
 
-    // Profile combo: rebuild only when the list/selection changed —
-    // rebuilding every sync would steal the open popup's state.
+    // Profile combo: only the ACTIVE DEVICE's profiles (M12 — a
+    // microscope profile never applies to another camera). Rebuild
+    // only when the list/selection changed — rebuilding every sync
+    // would steal the open popup's state.
     let names: Vec<String> = std::iter::once(strings::CALIBRATION_NONE.to_string())
-        .chain(config.calibration.iter().map(|p| p.name.clone()))
+        .chain(config.profiles_for(device).map(|p| p.name.clone()))
         .collect();
+    let profiles: Vec<&hiview_core::CalibrationProfile> = config.profiles_for(device).collect();
     let active_index = config
-        .active_calibration
-        .as_deref()
-        .and_then(|name| config.calibration.iter().position(|p| p.name == name))
+        .active_profile_for(device)
+        .and_then(|active| profiles.iter().position(|p| p.name == active.name))
         .map_or(0, |i| i + 1) as u32;
     let current: Vec<String> = (0..panel.profile_model.n_items())
         .filter_map(|i| panel.profile_model.string(i).map(|s| s.to_string()))
@@ -241,14 +244,24 @@ pub fn sync(
     panel.profile_row.set_selected(active_index);
     panel.profile_row.unblock_signal(&panel.profile_handler);
 
-    let has_active = config.active_profile().is_some();
+    let has_active = config.active_profile_for(device).is_some();
     panel.rename_btn.set_sensitive(has_active);
     panel.delete_btn.set_sensitive(has_active);
+
+    // M12: a camera with no profile measures in pixels — say so in
+    // the combo's subtitle instead of leaving "Nenhuma" ambiguous.
+    if !device.is_empty() && config.profiles_for(device).next().is_none() {
+        panel
+            .profile_row
+            .set_subtitle(strings::NO_CALIBRATION_FOR_CAMERA);
+    } else {
+        panel.profile_row.set_subtitle("");
+    }
 
     // The measurement list: one row per committed item, "Limpar"
     // re-appended last so it always sits below them. Rebuilt only when
     // the id set changes — gesture/hover syncs leave the DOM alone.
-    let px_per_mm = config.active_profile().map(|p| p.px_per_mm);
+    let px_per_mm = config.active_profile_for(device).map(|p| p.px_per_mm);
     let listed: (Vec<u64>, Option<f64>) = (measure.items.iter().map(|m| m.id).collect(), px_per_mm);
     if listed == panel.listed {
         panel.clear_row.set_sensitive(!listed.0.is_empty());
@@ -329,7 +342,7 @@ pub(crate) mod tests {
         ruler(&mut set, 0.0, 200.0);
         let config = AppConfig::default();
 
-        sync(&mut panel, &set, &config, &sink);
+        sync(&mut panel, &set, &config, "dev", &sink);
         assert_eq!(panel.list_rows.len(), 2);
         assert!(panel.clear_row.is_sensitive());
         // No calibration → pixel labels.
@@ -338,7 +351,7 @@ pub(crate) mod tests {
         // A second sync with the same signature must not rebuild:
         // the widget instances stay identical (hover/draft churn).
         let first = panel.list_rows[0].clone();
-        sync(&mut panel, &set, &config, &sink);
+        sync(&mut panel, &set, &config, "dev", &sink);
         assert_eq!(panel.list_rows[0], first);
 
         // Activating a profile re-labels the same ids in mm/µm.
@@ -349,10 +362,11 @@ pub(crate) mod tests {
                 Point::new(89.0, 0.0),
                 1.0,
                 "teste".into(),
+                "dev".into(),
             )
             .unwrap_or_else(|| panic!("profile valid")),
         );
-        sync(&mut panel, &set, &config2, &sink);
+        sync(&mut panel, &set, &config2, "dev", &sink);
         assert_eq!(panel.list_rows.len(), 2);
         let title = panel.list_rows[0].title().to_string();
         assert!(
@@ -372,19 +386,19 @@ pub(crate) mod tests {
         // calibrate row's subtitle flags the armed mode.
         let mut cal = MeasureSet::default();
         cal.arm(Some(MeasureTool::Calibrate));
-        sync(&mut panel, &cal, &config2, &sink);
+        sync(&mut panel, &cal, &config2, "dev", &sink);
         assert_eq!(panel.tool_row.selected(), 0);
         assert_eq!(
             panel.calibrate_row.subtitle().as_deref(),
             Some(strings::CALIBRATION_ARMED_HINT)
         );
         cal.arm(Some(MeasureTool::Ruler));
-        sync(&mut panel, &cal, &config2, &sink);
+        sync(&mut panel, &cal, &config2, "dev", &sink);
         assert_eq!(panel.calibrate_row.subtitle().as_deref(), Some(""));
 
         // Re-sync the measured set so the delete/clear checks below
         // still find their rows.
-        sync(&mut panel, &set, &config2, &sink);
+        sync(&mut panel, &set, &config2, "dev", &sink);
         assert_eq!(panel.list_rows.len(), 2);
 
         // Scroll guard: both combos carry the capture scroll

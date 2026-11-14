@@ -37,6 +37,16 @@ fn selected_for<'a>(
     }
 }
 
+/// Whether the "use another camera" page applies (M12 — pure, unit
+/// tested): device mode, nothing streaming yet, at least one camera
+/// known and NONE of them the microscope.
+fn offers_alternatives_for(mode: Mode, has_pipeline: bool, cameras: &[CameraDescriptor]) -> bool {
+    mode == Mode::Device
+        && !has_pipeline
+        && !cameras.is_empty()
+        && cameras.iter().all(|c| !c.is_microscope)
+}
+
 /// Whether a pipeline bus error means the device was physically removed
 /// rather than a real failure (CONVENTIONS §6: `error` only for failures
 /// the user perceives). The `v4l2src` poll error fires as soon as the node
@@ -52,7 +62,7 @@ fn is_disconnect_error(detail: &str) -> bool {
 fn adjust_key_for(source: &CaptureSource) -> String {
     match source {
         CaptureSource::Device(desc) => match (desc.usb_vid, desc.usb_pid) {
-            (Some(vid), Some(pid)) => format!("{vid:04x}:{pid:04x}"),
+            (Some(vid), Some(pid)) => hiview_core::usb_device_key(vid, pid),
             _ => desc.stable_id(),
         },
         CaptureSource::Test => "test".into(),
@@ -178,10 +188,49 @@ impl CameraService {
         }
     }
 
-    /// Whether the device-mode camera menu should be shown.
+    /// Whether the device-mode camera menu should be shown (M12:
+    /// with exactly one camera the user still sees it — the item
+    /// confirms what is in use and the microscope may still arrive).
     #[must_use]
     pub fn has_camera_menu(&self) -> bool {
-        self.mode == Mode::Device && self.cameras.len() > 1
+        self.mode == Mode::Device && !self.cameras.is_empty()
+    }
+
+    /// "No microscope, but other cameras exist" (M12): the
+    /// `Auto` selection resolves to nothing because every known
+    /// camera is a plain UVC device. The UI offers them on the
+    /// status page instead of searching forever.
+    #[must_use]
+    pub fn offers_alternatives(&self) -> bool {
+        offers_alternatives_for(self.mode, self.pipeline.is_some(), &self.cameras)
+    }
+
+    /// Stable id of a connected microscope, for the "Usar" action of
+    /// the microscope-connected toast.
+    #[must_use]
+    pub fn microscope_id(&self) -> Option<String> {
+        self.cameras
+            .iter()
+            .find(|c| c.is_microscope)
+            .map(|c| c.stable_id())
+    }
+
+    /// Whether the running pipeline is on the microscope (M12: the
+    /// connect toast is offered only while using another camera).
+    #[must_use]
+    pub fn active_is_microscope(&self) -> bool {
+        matches!(
+            self.pipeline.as_ref().map(|p| p.source()),
+            Some(CaptureSource::Device(d)) if d.is_microscope
+        )
+    }
+
+    /// Per-device config key of the active camera — `"VID:PID"` or
+    /// the stable id (§6.12): shared by image adjustments (§6.11) and
+    /// calibration (§6.9/M12). `None` while no pipeline runs.
+    #[must_use]
+    pub fn device_key(&self) -> Option<String> {
+        self.adjust_key()
     }
 
     /// Applies a new view orientation live on the running pipeline and
@@ -223,6 +272,14 @@ impl CameraService {
     #[must_use]
     pub fn adjust_key(&self) -> Option<String> {
         self.pipeline.as_ref().map(|p| adjust_key_for(p.source()))
+    }
+
+    /// `/dev` node of the camera the pipeline is using — the menu
+    /// marks it as the active entry (M12). `None` while no pipeline
+    /// runs.
+    #[must_use]
+    pub fn active_dev_node(&self) -> Option<std::path::PathBuf> {
+        self.pipeline.as_ref().and_then(|p| p.dev_node().cloned())
     }
 
     /// The capture pipeline's clock reference for A/V sync (M10.5):
@@ -424,6 +481,38 @@ mod tests {
             adjust_key_for(&CaptureSource::File(PathBuf::from("/tmp/clip.mp4"))),
             "file"
         );
+    }
+
+    /// M12 scope item 1: without a microscope the Auto selection
+    /// resolves to NOTHING — but with cameras present the UI offers
+    /// the alternatives page instead of searching forever.
+    #[test]
+    fn no_microscope_offers_the_alternatives() {
+        let webcams = vec![
+            fake_camera("/dev/video0", "pci-usb-0:6"),
+            fake_camera("/dev/video2", "pci-usb-0:7"),
+        ];
+        assert!(selected_for(&Selection::Auto, &webcams).is_none());
+        assert!(offers_alternatives_for(Mode::Device, false, &webcams));
+
+        // An empty camera list still shows the plain searching page.
+        assert!(!offers_alternatives_for(Mode::Device, false, &[]));
+        // A running pipeline (a manual pick) is streaming, not offered.
+        assert!(!offers_alternatives_for(Mode::Device, true, &webcams));
+        // Fixed CLI sources never offer the page.
+        assert!(!offers_alternatives_for(Mode::Fixed, false, &webcams));
+    }
+
+    /// M12 scope item 1/3: the microscope in the list resolves Auto —
+    /// the alternatives page is NOT offered, whether it arrives at
+    /// start-up or by hotplug before any manual choice.
+    #[test]
+    fn microscope_present_never_offers_alternatives() {
+        let mut microscope = fake_camera("/dev/video4", "pci-usb-0:5");
+        microscope.is_microscope = true;
+        let cameras = vec![fake_camera("/dev/video0", "pci-usb-0:6"), microscope];
+        assert!(!offers_alternatives_for(Mode::Device, false, &cameras));
+        assert!(selected_for(&Selection::Auto, &cameras).is_some());
     }
 
     #[test]

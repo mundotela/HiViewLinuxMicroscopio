@@ -39,6 +39,35 @@ pub const ERROR_DESCRIPTION: &str =
     "Verifique se o microscópio está conectado e se nenhum outro programa está usando a câmera.";
 
 /// Status page title when camera discovery itself failed.
+/// StatusPage shown when no microscope is connected but other
+/// cameras exist (M12 — the user picks one instead of waiting).
+pub const NO_MICROSCOPE_TITLE: &str = "Microscópio não encontrado";
+
+pub const NO_MICROSCOPE_DESCRIPTION: &str = "Conecte o microscópio ou use outra câmera disponível.";
+
+/// Button on that page opening the camera picker (>1 camera).
+pub const USE_OTHER_CAMERA: &str = "Usar outra câmera";
+
+/// Same button when exactly one camera is available — the label
+/// names it so the choice is obvious (M12).
+pub fn use_camera_label(name: &str) -> String {
+    format!("Usar {name}")
+}
+
+/// Toast when the microscope is hot-plugged while another camera is
+/// streaming — never switches by itself (M12).
+pub const MICROSCOPE_CONNECTED_TOAST: &str = "Microscópio conectado";
+
+/// Action label on that toast: switch to the microscope now.
+pub const MICROSCOPE_USE_ACTION: &str = "Usar";
+
+/// Camera switching is blocked while recording (M12).
+pub const SWITCH_WHILE_RECORDING: &str = "Pare a gravação para trocar de câmera";
+
+/// Measure-panel hint when the active camera has no calibration
+/// profile — measurements stay in pixels (M12).
+pub const NO_CALIBRATION_FOR_CAMERA: &str = "Sem calibração para esta câmera";
+
 pub const DISCOVERY_ERROR_TITLE: &str = "Não foi possível listar as câmeras";
 
 /// Status page description when camera discovery itself failed.
@@ -113,14 +142,16 @@ pub const PREFS_FOLDER_LABEL: &str = "Pasta";
 /// Button that opens the folder picker in preferences.
 pub const PREFS_FOLDER_BUTTON: &str = "Alterar…";
 
-/// Resolution option: sensor native size.
-pub const RES_NATIVE_LABEL: &str = "Nativa (640×480)";
-
-/// Resolution option: 2× interpolated.
-pub const RES_1280_LABEL: &str = "1280×960 (interpolada)";
-
-/// Resolution option: 2.5× interpolated.
-pub const RES_1600_LABEL: &str = "1600×1200 (interpolada)";
+/// Photo-resolution combo labels (M12): "Nativa" names the ACTIVE
+/// camera's size — the microscope's 640×480 is no longer the only
+/// case.
+pub fn resolution_label(res: hiview_core::PhotoResolution, native: (u32, u32)) -> String {
+    let (w, h) = res.output_size(native);
+    match res {
+        hiview_core::PhotoResolution::Native => format!("Nativa ({w}×{h})"),
+        _ => format!("{w}×{h} (interpolada)"),
+    }
+}
 
 /// Toast shown when the photo queue is full and a shot is dropped.
 pub const PHOTO_BUSY: &str = "Salvando fotos, aguarde…";
