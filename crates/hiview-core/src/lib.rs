@@ -34,7 +34,9 @@ pub use config::{
     AppConfig, ButtonConfig, ConfigLoad, NOISE_FRAME_OPTIONS, PhotoConfig, VideoConfig,
     config_path, load_config, save_config,
 };
-pub use devices::{KNOWN_MICROSCOPES, KnownMicroscope, is_known_microscope};
+pub use devices::{
+    KNOWN_MICROSCOPES, KnownMicroscope, MICROSCOPE_DEVICE_KEY, is_known_microscope, usb_device_key,
+};
 pub use error::{Error, Result};
 pub use gallery::{
     MediaItem, MediaKind, THUMB_MAX_EDGE, cache_dir, cache_files, date_label, decode_png,

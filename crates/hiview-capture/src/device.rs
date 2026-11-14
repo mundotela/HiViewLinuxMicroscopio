@@ -364,14 +364,79 @@ fn device_node(device: &gst::Device) -> Option<PathBuf> {
     Some(PathBuf::from(path))
 }
 
+/// The microscope keeps its fixed 640×480 mode; every other camera is
+/// capped at 1280×720 for the CPU budget (M12, ARCHITECTURE §7).
+const MAX_WIDTH: u32 = 1280;
+const MAX_HEIGHT: u32 = 720;
+const MIN_FPS: u32 = 25;
+
+/// Picks the default capture mode for a non-microscope camera (M12,
+/// pure logic, unit-tested):
+///
+/// 1. `YUY2` ≤1280×720 at ≥25 fps — cheap decode, no extra element;
+/// 2. `MJPG` ≤1280×720 at ≥25 fps — decoded by `jpegdec`;
+/// 3. `YUY2`/`MJPG` ≤1280×720 at any frame rate;
+/// 4. any other format ≤1280×720;
+/// 5. a camera that advertises nothing ≤720p gets its smallest mode —
+///    it is better to run lean than to refuse the camera entirely.
+///
+/// Within a tier the largest advertised size wins.
+#[must_use]
+pub fn select_default_mode(modes: &[CaptureMode]) -> Option<CaptureMode> {
+    fn fps_ge(mode: &CaptureMode, min: u32) -> bool {
+        mode.frame_rates.iter().any(|&(n, d)| n >= min * d)
+    }
+    fn tier(mode: &CaptureMode) -> u8 {
+        match mode.fourcc.as_str() {
+            "YUY2" if fps_ge(mode, MIN_FPS) => 4,
+            "MJPG" if fps_ge(mode, MIN_FPS) => 3,
+            "YUY2" | "MJPG" => 2,
+            _ => 1,
+        }
+    }
+    let in_budget: Vec<&CaptureMode> = modes
+        .iter()
+        .filter(|m| m.width <= MAX_WIDTH && m.height <= MAX_HEIGHT)
+        .collect();
+    if in_budget.is_empty() {
+        return modes.iter().min_by_key(|m| m.width * m.height).cloned();
+    }
+    in_budget
+        .into_iter()
+        .max_by_key(|m| (tier(m), m.width * m.height))
+        .cloned()
+}
+
+/// Best frame rate for a selected mode: the highest rate not above
+/// 30 fps (capture budget), or the lowest advertised when only faster
+/// rates exist. `None` for an empty rate list — the caps then go
+/// without a framerate field and the driver picks.
+#[must_use]
+pub fn best_frame_rate(mode: &CaptureMode) -> Option<(u32, u32)> {
+    mode.frame_rates
+        .iter()
+        .filter(|&&(n, d)| n <= 30 * d)
+        .max_by(|(a_n, a_d), (b_n, b_d)| (a_n * b_d).cmp(&(b_n * a_d)))
+        .or_else(|| {
+            mode.frame_rates
+                .iter()
+                .min_by(|(a_n, a_d), (b_n, b_d)| (a_n * b_d).cmp(&(b_n * a_d)))
+        })
+        .copied()
+}
+
 /// Extracts discrete capture modes from a `Video/Source` caps object.
+/// `video/x-raw` structures yield their `format` values (YUY2 etc.);
+/// `image/jpeg` structures map to the `MJPG` fourcc (decoded with
+/// `jpegdec`, plugins-good).
 fn modes_from_caps(caps: &gst::Caps) -> Vec<CaptureMode> {
     let mut modes = Vec::new();
     for structure in caps.iter() {
-        if structure.name() != "video/x-raw" {
-            continue;
-        }
-        let formats = strings_field(structure, "format");
+        let formats = match structure.name().as_str() {
+            "video/x-raw" => strings_field(structure, "format"),
+            "image/jpeg" => vec!["MJPG".to_string()],
+            _ => continue,
+        };
         let widths = ints_field(structure, "width");
         let heights = ints_field(structure, "height");
         let frame_rates: Vec<(u32, u32)> = fractions_field(structure, "framerate")
@@ -538,5 +603,80 @@ mod tests {
 
         assert_eq!(probes.len(), 1);
         assert!(probes.contains_key(Path::new("/dev/video9")));
+    }
+    fn mode(fourcc: &str, w: u32, h: u32, fps: &[(u32, u32)]) -> super::CaptureMode {
+        super::CaptureMode {
+            fourcc: fourcc.into(),
+            width: w,
+            height: h,
+            frame_rates: fps.to_vec(),
+        }
+    }
+
+    /// YUY2 at >=25 fps within the 720p budget always wins (M12 rule),
+    /// even over a higher-res MJPG mode.
+    #[test]
+    fn selects_yuy2_720p_or_best_raw_below_25fps() {
+        let modes = vec![
+            mode("YUY2", 1280, 720, &[(10, 1)]),
+            mode("YUY2", 640, 480, &[(30, 1)]),
+            mode("MJPG", 1280, 720, &[(30, 1)]),
+        ];
+        let pick =
+            super::select_default_mode(&modes).unwrap_or_else(|| panic!("a mode must be selected"));
+        assert_eq!(
+            (pick.fourcc.as_str(), pick.width, pick.height),
+            ("YUY2", 640, 480)
+        );
+    }
+
+    /// With no YUY2 at >=25 fps, MJPG takes over (M12 rule).
+    #[test]
+    fn selects_mjpg_when_no_fast_yuy2() {
+        let modes = vec![
+            mode("YUY2", 640, 480, &[(15, 1)]),
+            mode("MJPG", 1280, 720, &[(30, 1)]),
+        ];
+        let pick =
+            super::select_default_mode(&modes).unwrap_or_else(|| panic!("a mode must be selected"));
+        assert_eq!(
+            (pick.fourcc.as_str(), pick.width, pick.height),
+            ("MJPG", 1280, 720)
+        );
+    }
+
+    /// The 720p cap is a ceiling: a mode above it is never the default,
+    /// even when it is the only fast option.
+    #[test]
+    fn never_selects_above_720p_by_default() {
+        let modes = vec![
+            mode("YUY2", 1920, 1080, &[(30, 1)]),
+            mode("YUY2", 640, 480, &[(30, 1)]),
+        ];
+        let pick =
+            super::select_default_mode(&modes).unwrap_or_else(|| panic!("a mode must be selected"));
+        assert_eq!((pick.width, pick.height), (640, 480));
+    }
+
+    /// A camera that only offers >720p modes is not refused: it gets
+    /// its smallest (cheapest) mode.
+    #[test]
+    fn only_hd_modes_fall_back_to_the_smallest() {
+        let modes = vec![
+            mode("YUY2", 1920, 1080, &[(30, 1)]),
+            mode("YUY2", 1280, 1024, &[(30, 1)]),
+        ];
+        let pick =
+            super::select_default_mode(&modes).unwrap_or_else(|| panic!("a mode must be selected"));
+        assert_eq!((pick.width, pick.height), (1280, 1024));
+    }
+
+    /// Frame rate choice prefers the fastest rate not above 30 fps.
+    #[test]
+    fn best_rate_caps_at_30fps() {
+        let m = mode("YUY2", 640, 480, &[(60, 1), (30, 1), (15, 1)]);
+        assert_eq!(super::best_frame_rate(&m), Some((30, 1)));
+        let fast_only = mode("YUY2", 640, 480, &[(60, 1)]);
+        assert_eq!(super::best_frame_rate(&fast_only), Some((60, 1)));
     }
 }

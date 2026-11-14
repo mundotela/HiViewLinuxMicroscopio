@@ -181,6 +181,8 @@ pub enum Input {
     FrameReady,
     /// The user picked an entry in the camera menu.
     SelectCamera(String),
+    /// "Usar" action of the microscope-connected toast (M12).
+    UseMicroscope,
     /// Zoom in around the widget center (`+`).
     ZoomIn,
     /// Zoom out around the widget center (`-`).
@@ -361,6 +363,14 @@ pub struct AppModel {
 
     /// MenuButton handle, updated imperatively only on real changes.
     menu_button: gtk::MenuButton,
+    /// The microscope-connected toast was already shown for the
+    /// current microscope presence — it fires once per transition
+    /// (M12) and re-arms when the device leaves.
+    microscope_toast_shown: bool,
+    /// Frame size of the active camera, refreshed on `FrameReady` —
+    /// filters the photo-resolution choices (M12).
+    last_frame_size: Option<(u32, u32)>,
+
     /// Whether the FPS badge is enabled (debug builds or `--debug-overlay`).
     show_fps: bool,
     fps_label: String,
@@ -543,7 +553,7 @@ impl SimpleComponent for AppModel {
                                 set_title: strings::CALIBRATION_BANNER,
                                 #[watch]
                                 set_revealed: model.mode == AppMode::Bench
-                                    && model.config.active_profile().is_some(),
+                                    && model.active_calibration().is_some(),
                             },
 
                             #[name = "split_view"]
@@ -679,6 +689,7 @@ impl SimpleComponent for AppModel {
                         set_title: strings::SEARCHING_TITLE,
                         set_description: Some(strings::SEARCHING_DESCRIPTION),
                     },
+
 
                     #[name = "disconnected_page"]
                     add_child = &adw::StatusPage {
@@ -1029,6 +1040,8 @@ impl SimpleComponent for AppModel {
             viewport: Viewport::new(),
             menu_model: gio::Menu::new(),
             menu_signature: None,
+            microscope_toast_shown: false,
+            last_frame_size: None,
             menu_button: gtk::MenuButton::new(),
             show_fps: cfg!(debug_assertions) || init.debug_overlay,
             fps_label: String::new(),
@@ -1248,9 +1261,35 @@ impl SimpleComponent for AppModel {
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         match message {
             Input::Camera(event) => {
+                let microscope_arrived =
+                    matches!(&event, CameraEvent::Connected(d) if d.is_microscope);
+                let microscope_left =
+                    matches!(&event, CameraEvent::Disconnected(d) if d.is_microscope);
+                if microscope_left {
+                    self.microscope_toast_shown = false;
+                }
                 self.camera.on_event(event);
                 self.on_state_change();
                 self.ensure_button_source(&sender);
+                // M12: while another camera streams, a hot-plugged
+                // microscope is OFFERED, never auto-selected. Once
+                // per transition, and never during a recording.
+                if microscope_arrived
+                    && self.state == CameraState::Streaming
+                    && !self.camera.active_is_microscope()
+                    && self.recording.is_none()
+                    && !self.microscope_toast_shown
+                    && self.camera.microscope_id().is_some()
+                {
+                    self.microscope_toast_shown = true;
+                    let toast = adw::Toast::new(strings::MICROSCOPE_CONNECTED_TOAST);
+                    toast.set_button_label(Some(strings::MICROSCOPE_USE_ACTION));
+                    let sender2 = sender.clone();
+                    toast.connect_button_clicked(move |_| {
+                        sender2.input(Input::UseMicroscope);
+                    });
+                    self.show_toast(toast);
+                }
                 if matches!(self.state, CameraState::Disconnected | CameraState::Error) {
                     // No frames will arrive — stop the average and
                     // explain (M10 cancel rule).
@@ -1261,12 +1300,24 @@ impl SimpleComponent for AppModel {
                 }
             }
             Input::SelectCamera(target) => {
-                self.camera.select(&target);
-                self.on_state_change();
-                self.ensure_button_source(&sender);
+                // Switching mid-recording would orphan the recorder's
+                // frame source (M12) — refuse and explain.
+                if self.recording.is_some() {
+                    self.show_toast(adw::Toast::new(strings::SWITCH_WHILE_RECORDING));
+                } else {
+                    self.camera.select(&target);
+                    self.on_state_change();
+                    self.ensure_button_source(&sender);
+                }
+            }
+            Input::UseMicroscope => {
+                if let Some(id) = self.camera.microscope_id() {
+                    sender.input(Input::SelectCamera(id));
+                }
             }
             Input::FrameReady => {
                 if let Some(frame) = self.camera.frame_bus().take_latest_for_ui() {
+                    self.last_frame_size = Some((frame.width, frame.height));
                     self.viewport.set_frame(frame);
                     if self.show_fps {
                         self.tick_fps();
@@ -1405,11 +1456,12 @@ impl SimpleComponent for AppModel {
                 self.persist_config();
             }
             Input::SetPhotoResolution(sel) => {
-                self.config.photo.resolution = match sel {
-                    1 => PhotoResolution::X2,
-                    2 => PhotoResolution::X2p5,
-                    _ => PhotoResolution::Native,
-                };
+                let native = self.last_frame_size.unwrap_or((640, 480));
+                let available = PhotoResolution::available_for(native);
+                self.config.photo.resolution = available
+                    .get(sel as usize)
+                    .copied()
+                    .unwrap_or(PhotoResolution::Native);
                 self.persist_config();
             }
             Input::SetNoiseReduction(sel) => {
@@ -1606,9 +1658,12 @@ impl SimpleComponent for AppModel {
                 }
             }
             Input::CommitCalibration { name, mm } => {
-                if let Some((a, b)) = self.pending_calibration.take() {
+                let device = self.camera.device_key();
+                if let (Some((a, b)), Some(device)) = (self.pending_calibration.take(), device) {
                     let old_ppm = self.active_px_per_mm();
-                    if let Some(profile) = CalibrationProfile::from_line(a, b, mm, name.clone()) {
+                    if let Some(profile) =
+                        CalibrationProfile::from_line(a, b, mm, name.clone(), device)
+                    {
                         self.config.upsert_profile(profile);
                         self.calibration_changed(old_ppm);
                         tracing::info!("calibration profile created: {name}");
@@ -1616,30 +1671,44 @@ impl SimpleComponent for AppModel {
                 }
             }
             Input::SelectCalibration(index) => {
+                // The combo lists only the ACTIVE DEVICE's profiles
+                // (M12) — the index maps into `profiles_for`.
+                let Some(device) = self.camera.device_key() else {
+                    return;
+                };
                 // Ignore out-of-range selections — GTK can notify with
                 // `INVALID_LIST_POSITION` (u32::MAX) while the combo's
                 // model splices; treating it as "Nenhuma" would wipe
                 // the active profile (M8 round-2 finding).
-                if index as usize > self.config.calibration.len() {
+                if index as usize > self.config.profiles_for(&device).count() {
                     return;
                 }
                 let old_ppm = self.active_px_per_mm();
-                let name = index
-                    .checked_sub(1)
-                    .and_then(|i| self.config.calibration.get(i as usize))
-                    .map(|p| p.name.clone());
-                if self.config.active_calibration != name {
-                    self.config.active_calibration = name;
+                let name = index.checked_sub(1).and_then(|i| {
+                    self.config
+                        .profiles_for(&device)
+                        .nth(i as usize)
+                        .map(|p| p.name.clone())
+                });
+                if self
+                    .config
+                    .active_calibrations
+                    .get(&device)
+                    .map(String::as_str)
+                    != name.as_deref()
+                {
+                    self.config.set_active_profile(&device, name.as_deref());
                     self.calibration_changed(old_ppm);
                 }
             }
             Input::RequestRenameCalibration => {
-                if let Some(active) = self.config.active_profile() {
+                if let Some(active) = self.active_calibration() {
                     let current = active.name.clone();
                     let others: Vec<String> = self
                         .config
                         .calibration
                         .iter()
+                        .filter(|p| p.device == active.device)
                         .map(|p| p.name.clone())
                         .collect();
                     crate::measure_dialogs::open_rename_dialog(
@@ -1653,25 +1722,31 @@ impl SimpleComponent for AppModel {
             }
             Input::CalibrationRenamed(name) => {
                 let trimmed = name.trim();
-                if let Some(active) = self.config.active_profile()
+                let device = self.camera.device_key();
+                if let (Some(active), Some(device)) = (self.active_calibration(), device)
                     && !trimmed.is_empty()
                     && !self
                         .config
                         .calibration
                         .iter()
-                        .any(|p| p.name == trimmed && p.name != active.name)
+                        .any(|p| p.device == device && p.name == trimmed && p.name != active.name)
                 {
                     let old = active.name.clone();
-                    if let Some(p) = self.config.calibration.iter_mut().find(|p| p.name == old) {
+                    if let Some(p) = self
+                        .config
+                        .calibration
+                        .iter_mut()
+                        .find(|p| p.device == device && p.name == old)
+                    {
                         p.name = trimmed.to_string();
                     }
-                    self.config.active_calibration = Some(trimmed.to_string());
+                    self.config.set_active_profile(&device, Some(trimmed));
                     self.persist_config();
                     self.sync_measure_ui();
                 }
             }
             Input::RequestDeleteCalibration => {
-                if let Some(active) = self.config.active_profile() {
+                if let Some(active) = self.active_calibration() {
                     crate::measure_dialogs::confirm_delete_profile(
                         &self.window,
                         &active.name.clone(),
@@ -1681,8 +1756,10 @@ impl SimpleComponent for AppModel {
             }
             Input::DeleteCalibration => {
                 let old_ppm = self.active_px_per_mm();
-                if let Some(name) = self.config.active_calibration.clone() {
-                    self.config.remove_profile(&name);
+                if let Some(device) = self.camera.device_key()
+                    && let Some(name) = self.config.active_calibrations.get(&device).cloned()
+                {
+                    self.config.remove_profile(&device, &name);
                     self.calibration_changed(old_ppm);
                     tracing::info!("calibration profile deleted: {name}");
                 }
@@ -1750,13 +1827,40 @@ impl AppModel {
         // placeholder overlays stay `None` (hidden) until this runs.
         self.apply_overlays();
         self.install_focus_return();
+        // No camera event fires when nothing is plugged — without this
+        // the stack would sit on the placeholder page and text
+        // forever (the M12 alternatives hint never reached).
+        self.on_state_change();
+    }
+
+    /// Searching-page description (pure, unit-tested): the base
+    /// text gains the menu hint only while another camera exists.
+    fn searching_description(alternatives: bool) -> String {
+        if alternatives {
+            format!(
+                "{} {}",
+                strings::SEARCHING_DESCRIPTION,
+                strings::SEARCHING_OTHER_CAMERA_HINT
+            )
+        } else {
+            strings::SEARCHING_DESCRIPTION.to_string()
+        }
     }
 
     /// Syncs derived UI after a camera state change.
     fn on_state_change(&mut self) {
         self.state = self.camera.state();
         let page: &gtk::Widget = match self.state {
-            CameraState::Searching | CameraState::Starting => self.searching_page.upcast_ref(),
+            CameraState::Searching | CameraState::Starting => {
+                // M12: with other cameras available the searching
+                // page also points to the Câmera menu; with none it
+                // keeps the plain "connect it" text.
+                self.searching_page
+                    .set_description(Some(&Self::searching_description(
+                        self.camera.offers_alternatives(),
+                    )));
+                self.searching_page.upcast_ref()
+            }
             CameraState::Disconnected => self.disconnected_page.upcast_ref(),
             CameraState::Error => {
                 if self.camera.discovery_error().is_some() {
@@ -1774,6 +1878,12 @@ impl AppModel {
             CameraState::Streaming => self.video_page.upcast_ref(),
         };
         self.content_stack.set_visible_child(page);
+        tracing::debug!(
+            "camera state {:?}: alternatives={}, searching_desc={:?}",
+            self.state,
+            self.camera.offers_alternatives(),
+            self.searching_page.description(),
+        );
         self.maybe_apply_stored_adjust();
         if self.state != CameraState::Streaming {
             self.viewport.reset();
@@ -1875,10 +1985,21 @@ impl AppModel {
         self.apply_orientation();
     }
 
-    /// The active calibration's pixels-per-millimetre, or `None` —
-    /// measurements and grid/tick spacings fall back to pixels.
+    /// The active calibration's pixels-per-millimetre FOR THE ACTIVE
+    /// DEVICE, or `None` — measurements and grid/tick spacings fall
+    /// back to pixels. A different camera's profile never applies
+    /// (§6.9/M12).
     fn active_px_per_mm(&self) -> Option<f64> {
-        self.config.active_profile().map(|p| p.px_per_mm)
+        self.active_calibration().map(|p| p.px_per_mm)
+    }
+
+    /// The calibration profile active for the device currently in
+    /// use, keyed by the same VID:PID / stable-id rule as the image
+    /// adjustments. `None` while no pipeline runs or when the device
+    /// has no calibration ("Sem calibração para esta câmera").
+    fn active_calibration(&self) -> Option<&CalibrationProfile> {
+        let key = self.camera.device_key()?;
+        self.config.active_profile_for(&key)
     }
 
     /// The effective overlay state: the persisted grid/crosshair plus
@@ -1914,7 +2035,16 @@ impl AppModel {
     /// Pushes measurement + calibration state into the side panel.
     fn sync_measure_ui(&mut self) {
         if let Some(panel) = self.measure_panel.as_mut() {
-            crate::measure_ui::sync(panel, &self.measure, &self.config, &self.measure_sink);
+            // No pipeline → no device: an empty key matches no
+            // profile, so the combo shows only "Nenhuma".
+            let device = self.camera.device_key().unwrap_or_default();
+            crate::measure_ui::sync(
+                panel,
+                &self.measure,
+                &self.config,
+                &device,
+                &self.measure_sink,
+            );
         }
     }
 
@@ -2032,7 +2162,7 @@ impl AppModel {
                 format!("{} deg CW", 90 * u32::from(self.orientation.quarters_cw())),
             ),
         ];
-        if let Some(p) = self.config.active_profile() {
+        if let Some(p) = self.active_calibration() {
             meta.push(("Calibration".into(), p.name.clone()));
             meta.push(("Calibration px/mm".into(), format!("{:.3}", p.px_per_mm)));
         }
@@ -2058,8 +2188,9 @@ impl AppModel {
     fn camera_menu_entry(
         camera: &CameraDescriptor,
         cameras: &[CameraDescriptor],
+        active_node: Option<&std::path::Path>,
     ) -> (String, String) {
-        let label = if camera.is_microscope {
+        let mut label = if camera.is_microscope {
             strings::MICROSCOPE_LABEL.to_string()
         } else if cameras
             .iter()
@@ -2071,15 +2202,24 @@ impl AppModel {
         } else {
             camera.display_name().to_string()
         };
+        // The entry the pipeline is using gets a check mark (M12).
+        if active_node.is_some_and(|node| node == camera.dev_node.as_path()) {
+            label = format!("✓ {label}");
+        }
         (label, camera.stable_id())
     }
 
     /// Camera-list signature used to detect when the menu model must be
     /// rebuilt (pure, unit-tested). Frame updates never change it.
-    fn camera_menu_signature(cameras: &[CameraDescriptor]) -> Vec<String> {
-        cameras
-            .iter()
-            .map(|c| {
+    fn camera_menu_signature(
+        cameras: &[CameraDescriptor],
+        active_node: Option<&std::path::Path>,
+    ) -> Vec<String> {
+        // The active node rides the signature so a camera SWITCH
+        // rebuilds the ✓ marks even when the list itself is unchanged.
+        let active = active_node.map(|p| p.display().to_string());
+        std::iter::once(format!("active:{}", active.unwrap_or_default()))
+            .chain(cameras.iter().map(|c| {
                 format!(
                     "{}{}{}{}",
                     c.stable_id(),
@@ -2087,24 +2227,36 @@ impl AppModel {
                     c.dev_node.display(),
                     c.is_microscope
                 )
-            })
+            }))
             .collect()
     }
 
     /// Whether the camera list changed since the menu was last built
     /// (pure, unit-tested). `None` means the menu was never built.
-    fn menu_needs_rebuild(previous: &Option<Vec<String>>, cameras: &[CameraDescriptor]) -> bool {
-        previous.as_ref() != Some(&Self::camera_menu_signature(cameras))
+    fn menu_needs_rebuild(
+        previous: &Option<Vec<String>>,
+        cameras: &[CameraDescriptor],
+        active_node: Option<&std::path::Path>,
+    ) -> bool {
+        previous.as_ref() != Some(&Self::camera_menu_signature(cameras, active_node))
     }
 
     /// Rebuilds the menu model only when the camera list actually
     /// changed: re-setting the model on every update (e.g. the 30 fps
     /// frame updates) closes the open popover.
     fn sync_menu(&mut self) {
-        if !Self::menu_needs_rebuild(&self.menu_signature, self.camera.cameras()) {
+        let active_node = self.camera.active_dev_node();
+        if !Self::menu_needs_rebuild(
+            &self.menu_signature,
+            self.camera.cameras(),
+            active_node.as_deref(),
+        ) {
             return;
         }
-        self.menu_signature = Some(Self::camera_menu_signature(self.camera.cameras()));
+        self.menu_signature = Some(Self::camera_menu_signature(
+            self.camera.cameras(),
+            active_node.as_deref(),
+        ));
         let menu = gio::Menu::new();
         if self.camera.has_camera_menu() {
             let cameras_menu = gio::Menu::new();
@@ -2115,7 +2267,8 @@ impl AppModel {
                 ),
             );
             for camera in self.camera.cameras() {
-                let (label, target) = Self::camera_menu_entry(camera, self.camera.cameras());
+                let (label, target) =
+                    Self::camera_menu_entry(camera, self.camera.cameras(), active_node.as_deref());
                 cameras_menu.append_item(
                     &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
                         &label, &target,
@@ -2319,6 +2472,14 @@ impl AppModel {
     /// Feeds the photo worker with `frame` and `noise_frames` for the
     /// `noise_reduction_frames` PNG tEXt key (1 on single-frame shots).
     fn queue_photo(&mut self, frame: &hiview_capture::Frame, noise_frames: u32) {
+        // Clamp the stored resolution to what the ACTIVE frame can
+        // produce (M12): a 1600×1200 choice left over from the
+        // microscope falls back to native on a 720p webcam.
+        let mut prefs = self.config.photo.clone();
+        if !PhotoResolution::available_for((frame.width, frame.height)).contains(&prefs.resolution)
+        {
+            prefs.resolution = PhotoResolution::Native;
+        }
         let overlays = if self.config.photo.burn_overlays {
             // Burn the committed measurements — never a
             // half-finished draft (§6.9).
@@ -2333,7 +2494,7 @@ impl AppModel {
             .photos
             .take(
                 frame,
-                &self.config.photo,
+                &prefs,
                 self.photo_dir(),
                 overlays,
                 self.photo_png_text(noise_frames),
@@ -2953,16 +3114,23 @@ impl AppModel {
         let res_row = adw::ComboRow::new();
         crate::measure_ui::swallow_scroll(&res_row);
         res_row.set_title(strings::PREFS_RESOLUTION_LABEL);
-        res_row.set_model(Some(&gtk::StringList::new(&[
-            strings::RES_NATIVE_LABEL,
-            strings::RES_1280_LABEL,
-            strings::RES_1600_LABEL,
-        ])));
-        res_row.set_selected(match self.config.photo.resolution {
-            PhotoResolution::Native => 0,
-            PhotoResolution::X2 => 1,
-            PhotoResolution::X2p5 => 2,
-        });
+        // Only the resolutions the ACTIVE camera can produce (M12):
+        // interpolated sizes that would exceed 1600×1200 are hidden.
+        let native = self.last_frame_size.unwrap_or((640, 480));
+        let available = PhotoResolution::available_for(native);
+        let labels: Vec<String> = available
+            .iter()
+            .map(|r| strings::resolution_label(*r, native))
+            .collect();
+        res_row.set_model(Some(&gtk::StringList::new(
+            &labels.iter().map(String::as_str).collect::<Vec<_>>(),
+        )));
+        res_row.set_selected(
+            available
+                .iter()
+                .position(|r| *r == self.config.photo.resolution)
+                .unwrap_or(0) as u32,
+        );
         res_row.connect_selected_notify({
             let sender = sender.clone();
             move |row| sender.input(Input::SetPhotoResolution(row.selected()))
@@ -3190,7 +3358,7 @@ pub(crate) mod tests {
     #[test]
     fn menu_target_is_stable_id_not_device_node() {
         let cam = fake_camera("HD camera", "/dev/video2", Some("pci-usb-0:5"));
-        let (_, target) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam));
+        let (_, target) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam), None);
         assert_eq!(target, "pci-usb-0:5");
         assert_ne!(target, cam.dev_node.to_string_lossy());
     }
@@ -3198,7 +3366,7 @@ pub(crate) mod tests {
     #[test]
     fn menu_label_is_friendly_name_without_node() {
         let cam = fake_camera("ACER HD User Facing: ACER HD Us", "/dev/video0", Some("p"));
-        let (label, _) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam));
+        let (label, _) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam), None);
         assert_eq!(label, "ACER HD User Facing");
     }
 
@@ -3207,7 +3375,7 @@ pub(crate) mod tests {
         let a = fake_camera("HD camera", "/dev/video0", Some("p1"));
         let b = fake_camera("HD camera", "/dev/video2", Some("p2"));
         let cams = [a.clone(), b];
-        let (label, _) = AppModel::camera_menu_entry(&a, &cams);
+        let (label, _) = AppModel::camera_menu_entry(&a, &cams, None);
         assert_eq!(label, "HD camera (/dev/video0)");
     }
 
@@ -3218,13 +3386,17 @@ pub(crate) mod tests {
         let a = fake_camera("HD camera", "/dev/video0", Some("p1"));
         let b = fake_camera("HD camera", "/dev/video2", Some("p2"));
         let cams = [a.clone(), b.clone()];
-        let sig = Some(AppModel::camera_menu_signature(&cams));
+        let sig = Some(AppModel::camera_menu_signature(&cams, None));
         // A frame update does not touch the camera list: no rebuild.
-        assert!(!AppModel::menu_needs_rebuild(&sig, &cams));
+        assert!(!AppModel::menu_needs_rebuild(&sig, &cams, None));
         // Hotplug or a name collision changes the signature: rebuild.
         let after = [b, fake_camera("Other cam", "/dev/video4", Some("p3"))];
-        assert!(AppModel::menu_needs_rebuild(&sig, &after));
-        assert!(AppModel::menu_needs_rebuild(&sig, std::slice::from_ref(&a)));
+        assert!(AppModel::menu_needs_rebuild(&sig, &after, None));
+        assert!(AppModel::menu_needs_rebuild(
+            &sig,
+            std::slice::from_ref(&a),
+            None
+        ));
     }
 
     /// The menu must exist even with zero cameras (M11 fix): before the
@@ -3233,16 +3405,29 @@ pub(crate) mod tests {
     /// and the menu would never appear.
     #[test]
     fn menu_builds_even_without_cameras() {
-        assert!(AppModel::menu_needs_rebuild(&None, &[]));
-        let sig = Some(AppModel::camera_menu_signature(&[]));
-        assert!(!AppModel::menu_needs_rebuild(&sig, &[]));
+        assert!(AppModel::menu_needs_rebuild(&None, &[], None));
+        let sig = Some(AppModel::camera_menu_signature(&[], None));
+        assert!(!AppModel::menu_needs_rebuild(&sig, &[], None));
+    }
+
+    /// M12: the searching page carries the menu hint only while
+    /// another camera exists — with none, the plain text stays.
+    #[test]
+    fn searching_page_gains_menu_hint_only_with_alternatives() {
+        let with = AppModel::searching_description(true);
+        assert!(with.contains(strings::SEARCHING_DESCRIPTION));
+        assert!(with.contains(strings::SEARCHING_OTHER_CAMERA_HINT));
+        assert_eq!(
+            AppModel::searching_description(false),
+            strings::SEARCHING_DESCRIPTION
+        );
     }
 
     #[test]
     fn microscope_keeps_fixed_label() {
         let mut cam = fake_camera("HD camera", "/dev/video2", Some("p"));
         cam.is_microscope = true;
-        let (label, _) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam));
+        let (label, _) = AppModel::camera_menu_entry(&cam, std::slice::from_ref(&cam), None);
         assert_eq!(label, strings::MICROSCOPE_LABEL);
     }
 

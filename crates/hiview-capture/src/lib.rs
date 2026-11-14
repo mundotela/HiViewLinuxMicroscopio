@@ -14,7 +14,9 @@ mod pipeline;
 mod recorder;
 mod thumbs;
 
-pub use device::{CameraDescriptor, CaptureMode, DeviceWatcher, enumerate};
+pub use device::{
+    CameraDescriptor, CaptureMode, DeviceWatcher, best_frame_rate, enumerate, select_default_mode,
+};
 pub use error::Error;
 pub use events::{CameraEvent, CameraState};
 pub use frame::{Frame, FrameBus, FrameSubscription, PixelFormat};

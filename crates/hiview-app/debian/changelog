@@ -1,3 +1,12 @@
+hiview (1.1.0-1) unstable; urgency=medium
+
+  * Versão 1.1.0 — outras câmeras USB: escolha manual quando o
+    microscópio não está presente, aviso de chegada com ação "Usar",
+    formatos MJPG, calibração e ajustes por dispositivo, resoluções
+    de foto por câmera.
+
+ -- MundoTela Tecnologia <portskoll@gmail.com>  Sat, 14 Nov 2026 18:41:00 -0300
+
 hiview (1.0.0-1) unstable; urgency=medium
 
   * Versão 1.0.0 — primeiro lançamento empacotado.

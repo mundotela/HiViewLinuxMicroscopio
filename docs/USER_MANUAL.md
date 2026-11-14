@@ -133,6 +133,38 @@ Se aparecer **"Procurando microscópio…"**, veja a seção 12.
 > com `Ctrl+?`), **Tour de boas-vindas**, **Sobre o HiView** e
 > **Sair**.
 
+### 4.1 Usar outra câmera
+
+O HiView também funciona com outras câmeras USB — a webcam do
+notebook, por exemplo.
+
+- **Abriu sem o microscópio?** A tela **"Microscópio não
+  encontrado"** avisa que você pode usar outra câmera: abra o menu
+  ☰ → **Câmera** e escolha. Se você plugar o microscópio *antes* de
+  escolher, ele abre sozinho, como sempre.
+- **Trocar depois:** menu ☰ → **Câmera** — a lista mostra todas as
+  câmeras, a que está em uso vem marcada com **✓** e o microscópio
+  aparece como "Microscópio (05e3:f12a)".
+- **Microscópio plugado no meio do uso:** aparece o aviso
+  **"Microscópio conectado"** com o botão **"Usar"** — toque para
+  trocar ou ignore para continuar na câmera atual. Durante uma
+  **gravação** a troca fica bloqueada: pare a gravação primeiro.
+- **A escolha não é lembrada:** ao reabrir, o app volta a procurar o
+  microscópio primeiro.
+
+Diferenças ao usar outra câmera:
+
+- **Medição** continua funcionando, mas em **pixels** — cada câmera
+  tem sua própria calibração, e a do microscópio nunca é aplicada a
+  outra câmera. O painel de medição avisa "Sem calibração para esta
+  câmera" até você criar um perfil para ela (seção 11.3).
+- **Brilho/contraste** e os perfis de calibração são guardados **por
+  câmera** — cada uma lembra dos seus.
+- **Resolução da foto** acompanha a câmera: "Nativa" é o tamanho
+  real da imagem dela, e os tamanhos interpolados só aparecem quando
+  couberem em 1600×1200.
+- O **botão Snap** continua fotografando/gravando a câmera em uso.
+
 ---
 
 ## 5. A tela principal
@@ -397,8 +429,11 @@ Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 |---|---|
 | O app não encontra nenhuma câmera | Confira se o cabo USB está bem encaixado (troque de porta). Seu usuário precisa estar no grupo `video`: rode `groups` no terminal e, se `video` não aparecer, rode `sudo usermod -aG video <seu-usuário>` e faça logout/login. Verifique também se outro app está usando a câmera (Cheese, navegador, chamada de vídeo) — feche-o e reabra o HiView |
 | "Procurando microscópio…" não sai | Troque de porta USB. Teste `v4l2-ctl --list-devices` no terminal: o microscópio aparece como "HD camera" |
+| "Microscópio não encontrado" | O microscópio não está plugado — plugue-o (ele abre sozinho) ou use outra câmera pelo menu ☰ → **Câmera** |
 | "Não foi possível listar as câmeras" | Falta o plugin de vídeo do GStreamer: `sudo apt install gstreamer1.0-plugins-good` e reabra o app |
-| Aparece a webcam em vez do microscópio | Menu ☰ → Câmera → escolha "Microscópio (05e3:f12a)" |
+| Aparece a webcam em vez do microscópio | Menu ☰ → Câmera → escolha "Microscópio (05e3:f12a)". Se o microscópio acabou de ser plugado, use o botão **"Usar"** do aviso "Microscópio conectado" |
+| Não consigo trocar de câmera | A troca fica bloqueada durante uma gravação — pare a gravação primeiro |
+| Medida sai em pixels na webcam | A calibração é por câmera: a do microscópio não vale para outra. Crie um perfil para essa câmera (seção 11.3) |
 | Imagem escura | Gire a roda de brilho no cabo e depois ajuste o brilho no modo Bancada |
 | Imagem borrada | Gire o anel de ampliação devagar. Objetos muito altos podem precisar de mais distância |
 | Vídeo sai travado ou a câmera dá menos quadros | Em cena escura a exposição automática da câmera cai para ~20 fps — é limitação do aparelho, não do app. Ilumine a cena (roda do cabo) |

@@ -27,6 +27,21 @@ fn main() {
                     c.is_microscope,
                     c.modes.len()
                 );
+                for m in &c.modes {
+                    println!(
+                        "      {} {}x{} fps={:?}",
+                        m.fourcc, m.width, m.height, m.frame_rates
+                    );
+                }
+                if let Some(pick) = hiview_capture::select_default_mode(&c.modes) {
+                    println!(
+                        "      pick: {} {}x{} {:?}",
+                        pick.fourcc,
+                        pick.width,
+                        pick.height,
+                        hiview_capture::best_frame_rate(&pick)
+                    );
+                }
             }
         }
         Err(e) => {

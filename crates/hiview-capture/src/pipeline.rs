@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 use gst::prelude::*;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use hiview_core::{AdjustPlan, ImageAdjust, Orientation};
 
@@ -352,7 +352,38 @@ fn build_pipeline(
                 pipeline.add(&caps)?;
                 gst::Element::link_many([&src, &caps].into_iter().chain(tail.iter()))?;
             } else {
-                gst::Element::link_many([&src].into_iter().chain(tail.iter()))?;
+                // Other cameras: caps come from the device-advertised
+                // modes (M12) — never a hardcoded size. MJPG goes
+                // through jpegdec (plugins-good, in Depends).
+                match crate::device::select_default_mode(&desc.modes) {
+                    Some(mode) => {
+                        info!(
+                            "using mode {} {}x{} on {}",
+                            mode.fourcc,
+                            mode.width,
+                            mode.height,
+                            desc.dev_node.display()
+                        );
+                        let caps = caps_filter(mode_caps(&mode))?;
+                        pipeline.add(&caps)?;
+                        if mode.fourcc == "MJPG" {
+                            let dec = make("jpegdec")?;
+                            pipeline.add(&dec)?;
+                            gst::Element::link_many(
+                                [&src, &caps, &dec].into_iter().chain(tail.iter()),
+                            )?;
+                        } else {
+                            gst::Element::link_many([&src, &caps].into_iter().chain(tail.iter()))?;
+                        }
+                    }
+                    None => {
+                        warn!(
+                            "{} advertises no modes; letting v4l2src negotiate",
+                            desc.dev_node.display()
+                        );
+                        gst::Element::link_many([&src].into_iter().chain(tail.iter()))?;
+                    }
+                }
             }
         }
         CaptureSource::File(path) => {
@@ -367,6 +398,26 @@ fn build_pipeline(
     }
 
     Ok(pipeline)
+}
+
+/// Caps for a selected `CaptureMode`: `video/x-raw,format=<fourcc>`
+/// for raw formats or `image/jpeg` for MJPG (M12). The best frame
+/// rate ≤30 fps goes into the caps when the device advertises rates.
+fn mode_caps(mode: &crate::device::CaptureMode) -> gst::Caps {
+    let builder = if mode.fourcc == "MJPG" {
+        gst::Caps::builder("image/jpeg")
+    } else {
+        gst::Caps::builder("video/x-raw").field("format", mode.fourcc.as_str())
+    };
+    let builder = builder
+        .field("width", mode.width as i32)
+        .field("height", mode.height as i32);
+    match crate::device::best_frame_rate(mode) {
+        Some((n, d)) => builder
+            .field("framerate", gst::Fraction::new(n as i32, d as i32))
+            .build(),
+        None => builder.build(),
+    }
 }
 
 fn microscope_caps() -> gst::Caps {
