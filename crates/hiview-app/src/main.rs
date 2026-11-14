@@ -71,5 +71,6 @@ mod tests {
         crate::widgets::viewport::tests::check();
         crate::app::tests::check();
         crate::measure_ui::tests::check();
+        crate::shortcuts::tests::check();
     }
 }

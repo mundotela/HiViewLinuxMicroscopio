@@ -28,7 +28,9 @@ pub enum Shift {
 /// `win.*` action it activates, and how the shortcuts window displays
 /// it.
 pub struct ShortcutDef {
-    /// Display accelerator (`"Shift+R"`, `"Ctrl+?"`, `"Espaço"`).
+    /// GTK accelerator syntax for the window (`"space"`, `"<Shift>r"`,
+    /// `"<Control>comma"`) — NOT a display string; the widget parses
+    /// and renders it. `gtk::accelerator_parse` must accept it.
     pub accel: &'static str,
     /// PT-BR label shown in the window.
     pub label: &'static str,
@@ -40,18 +42,18 @@ pub struct ShortcutDef {
     pub shift: Shift,
     /// Activated `win.*` action.
     pub action: &'static str,
-    /// Window section title this entry is listed under.
+    /// Group title this entry is listed under.
     pub section: &'static str,
 }
 
 use Shift::{Any, Forbidden, Required};
 
 /// The canonical shortcut table (CONVENTIONS §13 + `Shift+R` from the
-/// M10.5 update). Order inside each section is the display order.
+/// M10.5 update). Order inside each group is the display order.
 pub const SHORTCUTS: &[ShortcutDef] = &[
     // --- Captura ---
     ShortcutDef {
-        accel: "Espaço",
+        accel: "space",
         label: strings::SC_TAKE_PHOTO,
         keys: &[Key::space],
         ctrl: false,
@@ -60,7 +62,7 @@ pub const SHORTCUTS: &[ShortcutDef] = &[
         section: strings::SC_GROUP_CAPTURE,
     },
     ShortcutDef {
-        accel: "R",
+        accel: "r",
         label: strings::SC_RECORD,
         keys: &[Key::r],
         ctrl: false,
@@ -69,7 +71,7 @@ pub const SHORTCUTS: &[ShortcutDef] = &[
         section: strings::SC_GROUP_CAPTURE,
     },
     ShortcutDef {
-        accel: "Shift+R",
+        accel: "<Shift>r",
         label: strings::SC_TOGGLE_MIC,
         keys: &[Key::r],
         ctrl: false,
@@ -78,7 +80,7 @@ pub const SHORTCUTS: &[ShortcutDef] = &[
         section: strings::SC_GROUP_CAPTURE,
     },
     ShortcutDef {
-        accel: "F",
+        accel: "f",
         label: strings::SC_FREEZE,
         keys: &[Key::f],
         ctrl: false,
@@ -86,127 +88,9 @@ pub const SHORTCUTS: &[ShortcutDef] = &[
         action: "win.freeze",
         section: strings::SC_GROUP_CAPTURE,
     },
-    // --- Geral ---
-    ShortcutDef {
-        accel: "M",
-        label: strings::SC_TOGGLE_MODE,
-        keys: &[Key::m],
-        ctrl: false,
-        shift: Any,
-        action: "win.toggle-mode",
-        section: strings::SC_GROUP_GENERAL,
-    },
-    ShortcutDef {
-        accel: "Ctrl+G",
-        label: strings::SC_GALLERY,
-        keys: &[Key::g],
-        ctrl: true,
-        shift: Any,
-        action: "win.gallery",
-        section: strings::SC_GROUP_GENERAL,
-    },
-    ShortcutDef {
-        accel: "Ctrl+,",
-        label: strings::SC_PREFERENCES,
-        keys: &[Key::comma],
-        ctrl: true,
-        shift: Any,
-        action: "win.preferences",
-        section: strings::SC_GROUP_GENERAL,
-    },
-    ShortcutDef {
-        accel: "Ctrl+?",
-        label: strings::SC_SHORTCUTS,
-        keys: &[Key::question],
-        ctrl: true,
-        shift: Any,
-        action: "win.shortcuts",
-        section: strings::SC_GROUP_GENERAL,
-    },
-    ShortcutDef {
-        accel: "F11",
-        label: strings::SC_FULLSCREEN,
-        keys: &[Key::F11],
-        ctrl: false,
-        shift: Any,
-        action: "win.fullscreen",
-        section: strings::SC_GROUP_GENERAL,
-    },
-    ShortcutDef {
-        accel: "Esc",
-        label: strings::SC_ESCAPE,
-        keys: &[Key::Escape],
-        ctrl: false,
-        shift: Any,
-        action: "win.escape",
-        section: strings::SC_GROUP_GENERAL,
-    },
-    ShortcutDef {
-        accel: "Ctrl+Q",
-        label: strings::SC_QUIT,
-        keys: &[Key::q],
-        ctrl: true,
-        shift: Any,
-        action: "win.quit",
-        section: strings::SC_GROUP_GENERAL,
-    },
     // --- Visualização ---
     ShortcutDef {
-        accel: "G",
-        label: strings::SC_GRID,
-        keys: &[Key::g],
-        ctrl: false,
-        shift: Any,
-        action: "win.toggle-grid",
-        section: strings::SC_GROUP_VIEW,
-    },
-    ShortcutDef {
-        accel: "C",
-        label: strings::SC_CROSSHAIR,
-        keys: &[Key::c],
-        ctrl: false,
-        shift: Any,
-        action: "win.toggle-crosshair",
-        section: strings::SC_GROUP_VIEW,
-    },
-    ShortcutDef {
-        accel: "H",
-        label: strings::SC_MIRROR_H,
-        keys: &[Key::h],
-        ctrl: false,
-        shift: Any,
-        action: "win.mirror-h",
-        section: strings::SC_GROUP_VIEW,
-    },
-    ShortcutDef {
-        accel: "V",
-        label: strings::SC_MIRROR_V,
-        keys: &[Key::v],
-        ctrl: false,
-        shift: Any,
-        action: "win.mirror-v",
-        section: strings::SC_GROUP_VIEW,
-    },
-    ShortcutDef {
-        accel: "[",
-        label: strings::SC_ROTATE_CCW,
-        keys: &[Key::bracketleft],
-        ctrl: false,
-        shift: Any,
-        action: "win.rotate-ccw",
-        section: strings::SC_GROUP_VIEW,
-    },
-    ShortcutDef {
-        accel: "]",
-        label: strings::SC_ROTATE_CW,
-        keys: &[Key::bracketright],
-        ctrl: false,
-        shift: Any,
-        action: "win.rotate-cw",
-        section: strings::SC_GROUP_VIEW,
-    },
-    ShortcutDef {
-        accel: "+",
+        accel: "plus",
         label: strings::SC_ZOOM_IN,
         keys: &[Key::plus, Key::equal, Key::KP_Add],
         ctrl: false,
@@ -215,7 +99,7 @@ pub const SHORTCUTS: &[ShortcutDef] = &[
         section: strings::SC_GROUP_VIEW,
     },
     ShortcutDef {
-        accel: "-",
+        accel: "minus",
         label: strings::SC_ZOOM_OUT,
         keys: &[Key::minus, Key::KP_Subtract],
         ctrl: false,
@@ -241,9 +125,72 @@ pub const SHORTCUTS: &[ShortcutDef] = &[
         action: "win.zoom-100",
         section: strings::SC_GROUP_VIEW,
     },
-    // --- Medição (Bancada) ---
     ShortcutDef {
-        accel: "L",
+        accel: "h",
+        label: strings::SC_MIRROR_H,
+        keys: &[Key::h],
+        ctrl: false,
+        shift: Any,
+        action: "win.mirror-h",
+        section: strings::SC_GROUP_VIEW,
+    },
+    ShortcutDef {
+        accel: "v",
+        label: strings::SC_MIRROR_V,
+        keys: &[Key::v],
+        ctrl: false,
+        shift: Any,
+        action: "win.mirror-v",
+        section: strings::SC_GROUP_VIEW,
+    },
+    ShortcutDef {
+        accel: "bracketleft",
+        label: strings::SC_ROTATE_CCW,
+        keys: &[Key::bracketleft],
+        ctrl: false,
+        shift: Any,
+        action: "win.rotate-ccw",
+        section: strings::SC_GROUP_VIEW,
+    },
+    ShortcutDef {
+        accel: "bracketright",
+        label: strings::SC_ROTATE_CW,
+        keys: &[Key::bracketright],
+        ctrl: false,
+        shift: Any,
+        action: "win.rotate-cw",
+        section: strings::SC_GROUP_VIEW,
+    },
+    ShortcutDef {
+        accel: "F11",
+        label: strings::SC_FULLSCREEN,
+        keys: &[Key::F11],
+        ctrl: false,
+        shift: Any,
+        action: "win.fullscreen",
+        section: strings::SC_GROUP_VIEW,
+    },
+    // --- Sobreposições e medição ---
+    ShortcutDef {
+        accel: "g",
+        label: strings::SC_GRID,
+        keys: &[Key::g],
+        ctrl: false,
+        shift: Any,
+        action: "win.toggle-grid",
+        section: strings::SC_GROUP_MEASURE,
+    },
+    ShortcutDef {
+        accel: "c",
+        label: strings::SC_CROSSHAIR,
+        keys: &[Key::c],
+        ctrl: false,
+        shift: Any,
+        action: "win.toggle-crosshair",
+        section: strings::SC_GROUP_MEASURE,
+    },
+    ShortcutDef {
+        accel: "l",
         label: strings::SC_MEASURE_RULER,
         keys: &[Key::l],
         ctrl: false,
@@ -252,7 +199,7 @@ pub const SHORTCUTS: &[ShortcutDef] = &[
         section: strings::SC_GROUP_MEASURE,
     },
     ShortcutDef {
-        accel: "A",
+        accel: "a",
         label: strings::SC_MEASURE_ANGLE,
         keys: &[Key::a],
         ctrl: false,
@@ -261,13 +208,68 @@ pub const SHORTCUTS: &[ShortcutDef] = &[
         section: strings::SC_GROUP_MEASURE,
     },
     ShortcutDef {
-        accel: "O",
+        accel: "o",
         label: strings::SC_MEASURE_CIRCLE,
         keys: &[Key::o],
         ctrl: false,
         shift: Any,
         action: "win.measure-circle",
         section: strings::SC_GROUP_MEASURE,
+    },
+    // --- Janela ---
+    ShortcutDef {
+        accel: "m",
+        label: strings::SC_TOGGLE_MODE,
+        keys: &[Key::m],
+        ctrl: false,
+        shift: Any,
+        action: "win.toggle-mode",
+        section: strings::SC_GROUP_WINDOW,
+    },
+    ShortcutDef {
+        accel: "<Control>g",
+        label: strings::SC_GALLERY,
+        keys: &[Key::g],
+        ctrl: true,
+        shift: Any,
+        action: "win.gallery",
+        section: strings::SC_GROUP_WINDOW,
+    },
+    ShortcutDef {
+        accel: "<Control>comma",
+        label: strings::SC_PREFERENCES,
+        keys: &[Key::comma],
+        ctrl: true,
+        shift: Any,
+        action: "win.preferences",
+        section: strings::SC_GROUP_WINDOW,
+    },
+    ShortcutDef {
+        accel: "<Control>question",
+        label: strings::SC_SHORTCUTS,
+        keys: &[Key::question],
+        ctrl: true,
+        shift: Any,
+        action: "win.shortcuts",
+        section: strings::SC_GROUP_WINDOW,
+    },
+    ShortcutDef {
+        accel: "Escape",
+        label: strings::SC_ESCAPE,
+        keys: &[Key::Escape],
+        ctrl: false,
+        shift: Any,
+        action: "win.escape",
+        section: strings::SC_GROUP_WINDOW,
+    },
+    ShortcutDef {
+        accel: "<Control>q",
+        label: strings::SC_QUIT,
+        keys: &[Key::q],
+        ctrl: true,
+        shift: Any,
+        action: "win.quit",
+        section: strings::SC_GROUP_WINDOW,
     },
 ];
 
@@ -308,7 +310,7 @@ pub fn shortcut_action(key: Key, state: ModifierType) -> Option<&'static str> {
         .map(|s| s.action)
 }
 
-/// Section titles in table order, for the window builder.
+/// Group titles in table order, for the window builder.
 fn sections() -> Vec<&'static str> {
     let mut seen = Vec::new();
     for def in SHORTCUTS {
@@ -319,17 +321,21 @@ fn sections() -> Vec<&'static str> {
     seen
 }
 
-/// Builds the `gtk::ShortcutsWindow` from [`SHORTCUTS`] — one
-/// `ShortcutsGroup` per section, one `ShortcutsShortcut` per row.
-/// Deprecated upstream but the only built-in option on the pinned
-/// GTK 4.14 (§4); an `adw` replacement does not exist yet.
+/// Builds the `gtk::ShortcutsWindow` from [`SHORTCUTS`] — ONE
+/// `ShortcutsSection` (so the section dropdown never appears) holding
+/// one `ShortcutsGroup` per group title. Deprecated upstream but the
+/// only built-in option on the pinned GTK 4.14 (§4); an `adw`
+/// replacement does not exist yet.
 #[allow(deprecated)]
 pub fn build_window() -> gtk::ShortcutsWindow {
     let window = gtk::ShortcutsWindow::builder().build();
-    for section_title in sections() {
-        let section = gtk::ShortcutsSection::builder().build();
-        let group = gtk::ShortcutsGroup::builder().title(section_title).build();
-        for def in SHORTCUTS.iter().filter(|d| d.section == section_title) {
+    let section = gtk::ShortcutsSection::builder()
+        .section_name("default")
+        .title(strings::SC_SECTION_TITLE)
+        .build();
+    for group_title in sections() {
+        let group = gtk::ShortcutsGroup::builder().title(group_title).build();
+        for def in SHORTCUTS.iter().filter(|d| d.section == group_title) {
             let row = gtk::ShortcutsShortcut::builder()
                 .title(def.label)
                 .accelerator(def.accel)
@@ -337,13 +343,13 @@ pub fn build_window() -> gtk::ShortcutsWindow {
             group.add_shortcut(&row);
         }
         section.add_group(&group);
-        window.add_section(&section);
     }
+    window.add_section(&section);
     window
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Every row of the display table must resolve through
@@ -366,6 +372,28 @@ mod tests {
                 "{} does not resolve to {}",
                 def.accel,
                 def.action
+            );
+        }
+    }
+
+    /// GTK-dependent check, called by `crate::tests::gtk_ui_contracts`
+    /// (single thread — `gtk4::rt` panics on a second caller).
+    /// Every `accel` string must be valid GTK accelerator syntax and
+    /// parse to a real key — otherwise the window renders the row
+    /// without any key, which is exactly the M11 review defect.
+    pub(crate) fn check() {
+        for def in SHORTCUTS {
+            let Some((key, _mods)) = gtk::accelerator_parse(def.accel) else {
+                panic!("'{}' is not valid accelerator syntax", def.accel);
+            };
+            // The parsed key must be one of the matched keys, so the
+            // displayed binding and the functional binding cannot
+            // diverge.
+            assert!(
+                def.keys.contains(&key.to_lower()),
+                "'{}' parses to {key:?} but keys are {:?}",
+                def.accel,
+                def.keys
             );
         }
     }

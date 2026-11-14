@@ -488,17 +488,20 @@ pub const ABOUT_LABEL: &str = "Sobre o HiView";
 /// Menu item that quits the application (`Ctrl+Q`).
 pub const QUIT_LABEL: &str = "Sair";
 
-/// Shortcuts window: section for capture actions.
+/// Shortcuts window: the single section's title.
+pub const SC_SECTION_TITLE: &str = "Atalhos";
+
+/// Shortcuts window: group for capture actions.
 pub const SC_GROUP_CAPTURE: &str = "Captura";
 
-/// Shortcuts window: section for app/window actions.
-pub const SC_GROUP_GENERAL: &str = "Geral";
+/// Shortcuts window: group for window/app actions.
+pub const SC_GROUP_WINDOW: &str = "Janela";
 
-/// Shortcuts window: section for view actions.
+/// Shortcuts window: group for view actions.
 pub const SC_GROUP_VIEW: &str = "Visualização";
 
-/// Shortcuts window: section for measurement tools (Bancada).
-pub const SC_GROUP_MEASURE: &str = "Medição (modo Bancada)";
+/// Shortcuts window: group for overlays and measurement tools.
+pub const SC_GROUP_MEASURE: &str = "Sobreposições e medição";
 
 /// Shortcut label: take a photo.
 pub const SC_TAKE_PHOTO: &str = "Tirar foto";
