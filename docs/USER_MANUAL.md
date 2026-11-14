@@ -395,7 +395,9 @@ Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 
 | Problema | O que fazer |
 |---|---|
+| O app não encontra nenhuma câmera | Confira se o cabo USB está bem encaixado (troque de porta). Seu usuário precisa estar no grupo `video`: rode `groups` no terminal e, se `video` não aparecer, rode `sudo usermod -aG video <seu-usuário>` e faça logout/login. Verifique também se outro app está usando a câmera (Cheese, navegador, chamada de vídeo) — feche-o e reabra o HiView |
 | "Procurando microscópio…" não sai | Troque de porta USB. Teste `v4l2-ctl --list-devices` no terminal: o microscópio aparece como "HD camera" |
+| "Não foi possível listar as câmeras" | Falta o plugin de vídeo do GStreamer: `sudo apt install gstreamer1.0-plugins-good` e reabra o app |
 | Aparece a webcam em vez do microscópio | Menu ☰ → Câmera → escolha "Microscópio (05e3:f12a)" |
 | Imagem escura | Gire a roda de brilho no cabo e depois ajuste o brilho no modo Bancada |
 | Imagem borrada | Gire o anel de ampliação devagar. Objetos muito altos podem precisar de mais distância |
