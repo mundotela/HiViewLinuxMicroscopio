@@ -14,8 +14,12 @@ pub fn build() -> adw::AboutDialog {
     about.set_application_icon(strings::APP_ID);
     about.set_version(env!("CARGO_PKG_VERSION"));
     about.set_developer_name("MundoTela Tecnologia");
-    about.set_developers(&[strings::ABOUT_DEV_HENRIQUE, strings::ABOUT_DEV_AI]);
+    about.set_developers(&[strings::ABOUT_DEV_HENRIQUE]);
     about.set_copyright("© 2026 MundoTela Tecnologia");
+    about.add_credit_section(
+        Some(strings::ABOUT_AI_CREDIT_TITLE),
+        strings::ABOUT_AI_CREDITS,
+    );
     about.set_license_type(gtk::License::Gpl30);
     about
 }

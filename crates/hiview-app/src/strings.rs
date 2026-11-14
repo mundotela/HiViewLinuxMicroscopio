@@ -608,9 +608,15 @@ pub const TOUR_NEXT: &str = "Avançar";
 /// Tour button on the last page: finish.
 pub const TOUR_START: &str = "Começar";
 
-/// About dialog: developer credits line for the assisted
-/// implementation (wording pending engineering review — M11 report).
-pub const ABOUT_DEV_AI: &str = "Devin (Cognition) — implementação assistida por IA";
+/// About dialog: credit-section title for the AI-assisted
+/// implementation (wording approved in the M11 review).
+pub const ABOUT_AI_CREDIT_TITLE: &str = "Desenvolvido com assistência de IA";
+
+/// About dialog: AI credit lines, shown under [`ABOUT_AI_CREDIT_TITLE`].
+pub const ABOUT_AI_CREDITS: &[&str] = &[
+    "Claude (Anthropic) — arquitetura e revisão",
+    "Devin (Cognition) — implementação",
+];
 
 /// About dialog: the human developer credit.
 pub const ABOUT_DEV_HENRIQUE: &str = "Henrique — MundoTela Tecnologia";
