@@ -1,6 +1,6 @@
 # HiView — Manual do Usuário
 
-> **Rascunho 0.1** — descreve o comportamento planejado da versão 1.0. Atualizado a cada etapa do desenvolvimento.
+> **Versão 1.0.0** — descreve o aplicativo HiView tal como ele está instalado.
 
 ---
 
@@ -44,32 +44,75 @@ O HiView é honesto sobre isso: quando você escolhe salvar em resolução maior
 
 ## 3. Instalação
 
-**Requisito de processador:** x86-64 com SSE4.2 (Intel a partir de
-~2009, AMD a partir de ~2011). Se o HiView não abrir em um computador
-muito antigo, esse é o motivo mais provável.
+**Requisitos:** Pop!_OS ou Ubuntu 24.04 (ou superior) e processador
+x86-64 com SSE4.2 (Intel a partir de ~2009, AMD a partir de ~2011 —
+praticamente qualquer computador atual). Se o HiView não abrir em um
+computador muito antigo, esse é o motivo mais provável.
 
 ### 3.1 Programa principal
 
+Baixe o arquivo `hiview_1.0.0-1_amd64.deb` e instale:
+
 ```bash
-sudo apt install ./hiview_<versão>_amd64.deb
+sudo apt install ./hiview_1.0.0-1_amd64.deb
 ```
 
-Depois, procure **HiView** no menu de aplicativos.
+Depois, procure **HiView** no menu de aplicativos. O ícone é um
+microscópio verde-água.
+
+> Uma cópia deste manual fica instalada em
+> `/usr/share/doc/hiview/USER_MANUAL.md`, e a página de manual
+> `man hiview` resume as opções de linha de comando.
+
+**Para desinstalar:**
+
+```bash
+sudo apt remove hiview
+```
 
 ### 3.2 Botão físico Snap (opcional)
 
-O sistema Linux atual não reconhece o botão Snap deste microscópio sozinho. Um pequeno serviço opcional, o `hiview-buttond`, resolve isso. Para instalar, rode dentro da pasta do projeto:
+O sistema Linux não reconhece o botão Snap deste microscópio sozinho.
+Um pequeno serviço opcional, o `hiview-buttond`, resolve isso:
 
 ```bash
-cargo build --release -p hiview-buttond
-sudo ./scripts/install-buttond.sh
+sudo apt install ./hiview-buttond_1.0.0-1_amd64.deb
 ```
 
-O instalador exige o binário já compilado (o `cargo build` acima), cria o grupo `hiview`, adiciona o seu usuário a ele e ativa o serviço. Para desinstalar: `sudo ./scripts/install-buttond.sh --uninstall`.
+**Depois de instalar, saia da sessão e entre novamente**
+(logout/login). Isso é necessário para liberar o acesso ao botão.
+O pacote já cria o grupo `hiview` e adiciona o seu usuário a ele.
+Se você instalou de um terminal sem sessão gráfica e a mensagem pedir,
+rode `sudo usermod -aG hiview <seu-usuário>` e faça logout/login.
 
-**Depois de instalar, saia da sessão e entre novamente** (logout/login). Isso é necessário para liberar o acesso ao botão.
+**Para desinstalar:**
 
-> **Sobre segurança:** esse componente roda com privilégios de administrador porque só o root pode observar a comunicação USB (`/dev/usbmon`). Ele foi feito para enviar ao HiView **somente** duas mensagens — "botão apertado" e "botão solto". Nenhum dado do USB (imagem, vídeo ou qualquer outro tráfego) sai do serviço, ele não grava arquivos e não tem acesso à rede. Se preferir não instalar, tudo funciona normalmente pelo teclado e pelo mouse.
+```bash
+sudo apt remove hiview-buttond
+```
+
+> **Sobre segurança:** esse componente roda com privilégios de
+> administrador porque só o root pode observar a comunicação USB
+> (`/dev/usbmon`). Ele foi feito para enviar ao HiView **somente** duas
+> mensagens — "botão apertado" e "botão solto". Nenhum dado do USB
+> (imagem, vídeo ou qualquer outro tráfego) sai do serviço, ele não
+> grava arquivos e não tem acesso à rede. Se preferir não instalar,
+> tudo funciona normalmente pelo teclado e pelo mouse.
+
+### 3.3 Migração: instalado antes pelo script
+
+Se o botão já foi instalado pelo script `install-buttond.sh`
+(versões anteriores ao pacote), desinstale pelo script **antes** de
+instalar o `.deb`, para não deixar dois serviços disputando o mesmo
+nome:
+
+```bash
+sudo ./scripts/install-buttond.sh --uninstall
+sudo apt install ./hiview-buttond_1.0.0-1_amd64.deb
+```
+
+O script continua no repositório para quem compila da fonte, mas o
+`.deb` é o caminho recomendado.
 
 ---
 
@@ -77,10 +120,18 @@ O instalador exige o binário já compilado (o `cargo build` acima), cria o grup
 
 1. Conecte o microscópio a uma porta USB.
 2. Abra o HiView. Ele encontra o microscópio sozinho, mesmo que o notebook tenha webcam.
-3. Coloque o objeto sob a lente e gire o **anel de ampliação** até focar.
-4. Ajuste o brilho na **roda do cabo**.
+3. Na **primeira vez**, um pequeno tour de boas-vindas em três telas
+   apresenta o programa (pode pular com **Pular**). Ele aparece só
+   essa vez — para revê-lo, abra o menu ☰ → **Tour de boas-vindas**.
+4. Coloque o objeto sob a lente e gire o **anel de ampliação** até focar.
+5. Ajuste o brilho na **roda do cabo**.
 
 Se aparecer **"Procurando microscópio…"**, veja a seção 12.
+
+> O menu ☰ (canto superior direito) reúne: **Preferências**,
+> **Atalhos de teclado** (a mesma lista da seção 13, também aberta
+> com `Ctrl+?`), **Tour de boas-vindas**, **Sobre o HiView** e
+> **Sair**.
 
 ---
 
@@ -344,13 +395,21 @@ Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 
 | Problema | O que fazer |
 |---|---|
+| O app não encontra nenhuma câmera | Confira se o cabo USB está bem encaixado (troque de porta). Seu usuário precisa estar no grupo `video`: rode `groups` no terminal e, se `video` não aparecer, rode `sudo usermod -aG video <seu-usuário>` e faça logout/login. Verifique também se outro app está usando a câmera (Cheese, navegador, chamada de vídeo) — feche-o e reabra o HiView |
 | "Procurando microscópio…" não sai | Troque de porta USB. Teste `v4l2-ctl --list-devices` no terminal: o microscópio aparece como "HD camera" |
+| "Não foi possível listar as câmeras" | Falta o plugin de vídeo do GStreamer: `sudo apt install gstreamer1.0-plugins-good` e reabra o app |
 | Aparece a webcam em vez do microscópio | Menu ☰ → Câmera → escolha "Microscópio (05e3:f12a)" |
 | Imagem escura | Gire a roda de brilho no cabo e depois ajuste o brilho no modo Bancada |
 | Imagem borrada | Gire o anel de ampliação devagar. Objetos muito altos podem precisar de mais distância |
-| Botão Snap não faz nada | Verifique se o `hiview-buttond` está instalado e se você fez logout/login. Status em Preferências → Botão físico |
-| "Gravação indisponível" | Instale os codecs: `sudo apt install gstreamer1.0-plugins-ugly` |
+| Vídeo sai travado ou a câmera dá menos quadros | Em cena escura a exposição automática da câmera cai para ~20 fps — é limitação do aparelho, não do app. Ilumine a cena (roda do cabo) |
+| Botão Snap não faz nada | Verifique se o pacote `hiview-buttond` está instalado e se você fez **logout/login** depois da instalação. Status em Preferências → Botão físico |
+| Botão funcionava e parou | O microscópio trocou de endereço USB ao ser reconectado — o serviço acompanha sozinho; se não voltar, reinicie o app |
+| "Gravação indisponível" | Confira os plugins: `sudo apt install gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly` |
+| Vídeo sai sem som | O áudio fica **desligado por padrão**: ligue em Preferências → Vídeo → Gravar áudio do microfone, no botão de microfone da barra, ou `Shift+R` |
+| Medidor de som não se mexe | Confira o microfone escolhido em Preferências → Vídeo e o volume de entrada do sistema |
 | Medidas parecem erradas | Você mexeu no anel ou na altura depois de calibrar? Calibre de novo |
+| Ícone não aparece no menu | Rode `update-desktop-database` ou reinicie a sessão gráfica — alguns ambientes demoram para indexar o novo `.desktop` |
+| App não abre em PC muito antigo | O HiView exige processador x86-64-v2 (SSE4.2). Veja §3 |
 
 ---
 

@@ -41,3 +41,43 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+  # M11: builds both .deb packages and checks them with lintian.
+  # Artifacts are published for engineering review/install.
+  packaging:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev \
+            libadwaita-1-dev \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libudev-dev \
+            lintian
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deb
+        run: cargo install cargo-deb
+
+      - name: Build packages
+        run: |
+          cargo deb -p hiview-app
+          cargo deb -p hiview-buttond
+
+      - name: Lintian
+        # Errors (E:) fail the build; warnings stay informational.
+        run: lintian --fail-on error target/debian/*.deb
+
+      - name: Upload .deb artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hiview-debs
+          path: target/debian/*.deb
+          if-no-files-found: error

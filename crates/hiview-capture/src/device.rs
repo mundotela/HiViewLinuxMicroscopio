@@ -5,8 +5,11 @@
 //! §6.1). Device nodes (`/dev/videoN`) are discovered, never hardcoded.
 //!
 //! USB identity (VID:PID) and hotplug come from udev; capture capabilities
-//! and formats come from GStreamer's device monitor, which probes nodes under
-//! the `Video/Source` class.
+//! and formats come from the `v4l2deviceprovider` GStreamer device provider
+//! — used explicitly, NOT via `gst::DeviceMonitor`: with
+//! `gstreamer1.0-pipewire` installed (Ubuntu 24.04 GNOME default), the
+//! monitor's pipewire provider hides v4l2 and lists cameras without
+//! `device.path`, so nothing matched the udev nodes (M11 field test).
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -108,7 +111,7 @@ pub fn enumerate() -> Result<Vec<CameraDescriptor>, Error> {
         .filter_map(|d| d.devnode().map(|n| n.to_path_buf()).map(|n| (n, d)))
         .collect();
 
-    let probes = probe_capture_nodes();
+    let probes = probe_capture_nodes()?;
     let mut cameras = Vec::new();
     for (node, dev) in nodes {
         match describe(&node, &dev, &probes) {
@@ -204,7 +207,7 @@ fn on_monitor_event(event: &udev::Event, on_event: &dyn Fn(CameraEvent)) {
 fn describe_with_retry(node: &Path, dev: &udev::Device) -> Result<CameraDescriptor, Error> {
     let mut last_err = None;
     for attempt in 0..8 {
-        match describe(node, dev, &probe_capture_nodes()) {
+        match probe_capture_nodes().and_then(|probes| describe(node, dev, &probes)) {
             Ok(desc) => return Ok(desc),
             Err(err) => {
                 last_err = Some(err);
@@ -307,17 +310,35 @@ struct Probe {
     modes: Vec<CaptureMode>,
 }
 
-/// Snapshots the `Video/Source` device monitor into a `devnode → caps` map.
-fn probe_capture_nodes() -> HashMap<PathBuf, Probe> {
-    let monitor = gst::DeviceMonitor::new();
-    monitor.add_filter(Some("Video/Source"), None);
-    if monitor.start().is_err() {
-        warn!("gstreamer device monitor failed to start");
-        return HashMap::new();
-    }
+/// Snapshots the `v4l2deviceprovider` into a `devnode → caps` map.
+///
+/// The provider is named explicitly instead of going through
+/// `gst::DeviceMonitor`, which delegates to every installed provider —
+/// including the pipewire one that shadows v4l2 devices with nodes
+/// that carry no `device.path`.
+///
+/// # Errors
+/// `NoV4l2Provider` when the factory is absent or refuses to start.
+fn probe_capture_nodes() -> Result<HashMap<PathBuf, Probe>, Error> {
+    let Some(provider) = gst::DeviceProviderFactory::by_name("v4l2deviceprovider") else {
+        return Err(Error::NoV4l2Provider(
+            "factory not found — is gstreamer1.0-plugins-good installed?".into(),
+        ));
+    };
+    provider
+        .start()
+        .map_err(|e| Error::NoV4l2Provider(format!("start failed: {e}")))?;
 
+    let probes = probes_from_devices(provider.devices());
+    provider.stop();
+    Ok(probes)
+}
+
+/// Converts provider devices into the probe map, skipping entries
+/// without a `device.path` property (e.g. PipeWire nodes).
+fn probes_from_devices(devices: impl IntoIterator<Item = gst::Device>) -> HashMap<PathBuf, Probe> {
     let mut probes = HashMap::new();
-    for device in monitor.devices() {
+    for device in devices {
         let Some(node) = device_node(&device) else {
             continue;
         };
@@ -333,8 +354,6 @@ fn probe_capture_nodes() -> HashMap<PathBuf, Probe> {
             },
         );
     }
-
-    monitor.stop();
     probes
 }
 
@@ -422,4 +441,102 @@ fn fractions_field(s: &gst::StructureRef, name: &str) -> Vec<gst::Fraction> {
             .collect();
     }
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use gst::glib;
+    use gst::prelude::*;
+
+    use super::probes_from_devices;
+
+    mod imp {
+        use gst::glib;
+        use gst::subclass::prelude::*;
+
+        #[derive(Default)]
+        pub struct FakeDevice;
+
+        #[glib::object_subclass]
+        impl ObjectSubclass for FakeDevice {
+            const NAME: &'static str = "HiViewFakeDevice";
+            type Type = super::FakeDevice;
+            type ParentType = gst::Device;
+        }
+
+        impl ObjectImpl for FakeDevice {}
+        impl GstObjectImpl for FakeDevice {}
+        impl DeviceImpl for FakeDevice {}
+    }
+
+    glib::wrapper! {
+        pub struct FakeDevice(ObjectSubclass<imp::FakeDevice>) @extends gst::Device, gst::Object;
+    }
+
+    /// Device shaped like a `v4l2deviceprovider` entry.
+    fn fake_v4l2_device(path: &str, display_name: &str) -> gst::Device {
+        let props = gst::Structure::builder("props")
+            .field("device.path", path)
+            .build();
+        let caps = gst::Caps::builder("video/x-raw")
+            .field("format", "YUYV")
+            .field("width", 640)
+            .field("height", 480)
+            .field("framerate", gst::Fraction::new(30, 1))
+            .build();
+        glib::Object::builder::<FakeDevice>()
+            .property("display-name", display_name)
+            .property("caps", &caps)
+            .property("properties", &props)
+            .build()
+            .upcast()
+    }
+
+    /// Device shaped like a `pipewiredeviceprovider` entry: the same
+    /// camera but no `device.path` (the M11 Ubuntu-GNOME failure).
+    fn fake_pipewire_device(node_name: &str, display_name: &str) -> gst::Device {
+        let props = gst::Structure::builder("props")
+            .field("device.api", "v4l2")
+            .field("node.name", node_name)
+            .build();
+        glib::Object::builder::<FakeDevice>()
+            .property("display-name", display_name)
+            .property("properties", &props)
+            .build()
+            .upcast()
+    }
+
+    #[test]
+    fn v4l2_provider_devices_populate_the_probe_map() {
+        crate::init().unwrap_or_else(|e| panic!("gst init: {e}"));
+        let devices = vec![
+            fake_v4l2_device("/dev/video0", "Integrated Camera"),
+            fake_v4l2_device("/dev/video9", "HD camera"),
+        ];
+
+        let probes = probes_from_devices(devices);
+
+        let microscope = probes
+            .get(Path::new("/dev/video9"))
+            .unwrap_or_else(|| panic!("v4l2 microscope node must be probed"));
+        assert_eq!(microscope.display_name.as_deref(), Some("HD camera"));
+        assert!(!microscope.modes.is_empty(), "caps must yield modes");
+        assert!(probes.contains_key(Path::new("/dev/video0")));
+    }
+
+    #[test]
+    fn devices_without_device_path_are_skipped() {
+        crate::init().unwrap_or_else(|e| panic!("gst init: {e}"));
+        let devices = vec![
+            fake_pipewire_device("v4l2_input.pci-usb", "HD camera (V4L2)"),
+            fake_v4l2_device("/dev/video9", "HD camera"),
+        ];
+
+        let probes = probes_from_devices(devices);
+
+        assert_eq!(probes.len(), 1);
+        assert!(probes.contains_key(Path::new("/dev/video9")));
+    }
 }

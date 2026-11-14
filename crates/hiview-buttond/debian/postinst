@@ -1,0 +1,23 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# postinst for hiview-buttond (docs/CONVENTIONS.md §11.1 — root code).
+set -e
+
+# usbmon provides /dev/usbmon* for the daemon. Optional: if the module
+# cannot be loaded the unit fails and Restart=on-failure retries.
+modprobe usbmon 2>/dev/null || true
+
+#DEBHELPER#
+# The token above expands to (1) the dh_installsysusers fragment —
+# `systemd-sysusers hiview.conf`, creating the `hiview` group —
+# and (2) the dh_installsystemd fragment — daemon-reload, enable and
+# start the unit. The group must exist before the usermod below.
+
+# Only when invoked via sudo from a real session do we know which user
+# runs the app; a plain root shell gets instructions instead.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    usermod -aG hiview "$SUDO_USER" || true
+    echo "hiview-buttond: '$SUDO_USER' added to group 'hiview' — log out and back in for it to take effect."
+else
+    echo "hiview-buttond: add your user to the group with: sudo usermod -aG hiview <seu-usuário> e faça logout/login"
+fi

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 MundoTela Tecnologia
+
 //! `DelayedBin` — a `gst::Bin` whose NULL→READY transition sleeps a
 //! configured amount (M10.5). A real `pulsesrc` can take hundreds of
 //! milliseconds to open the device *inside* the pipeline's

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=HiView
+GenericName=Microscópio USB
+Comment=Veja, fotografe, filme e meça com o seu microscópio USB
+Exec=hiview
+Icon=br.com.mundotela.HiView
+Terminal=false
+Categories=Graphics;Science;Electronics;
+Keywords=microscópio;microscope;câmera;ampliação;medição;solda;eletrônica;
+StartupNotify=true

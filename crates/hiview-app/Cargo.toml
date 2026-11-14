@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "HiView desktop application (GTK4/libadwaita/Relm4)"
+description = "visualizador para microscópios USB: foto, vídeo e medição"
 
 [lints]
 workspace = true
@@ -25,3 +25,104 @@ signal-hook.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# Debian package (cargo-deb, M11). Plugin set: PASSO 0 map in
+# docs/reports/M11.md — every element the production pipelines use.
+[package.metadata.deb]
+name = "hiview"
+maintainer = "MundoTela Tecnologia <portskoll@gmail.com>"
+# DEP-5 copyright — the license stanza points at common-licenses
+# instead of embedding the full GPL text (lintian).
+copyright = '''
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: HiView
+Upstream-Contact: MundoTela Tecnologia <portskoll@gmail.com>
+Source: https://github.com/mundotela/HiViewLinuxMicroscopio
+
+Files: *
+Copyright: 2026 MundoTela Tecnologia
+License: GPL-3+
+
+License: GPL-3+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ .
+ On Debian systems, the complete text of the GNU General Public
+ License version 3 can be found in `/usr/share/common-licenses/GPL-3'.
+'''
+section = "science"
+priority = "optional"
+changelog = "debian/changelog"
+# $auto (shlibs) covers GTK/adwaita/GStreamer libs. Plugins:
+# - plugins-base: videoconvert, audioconvert/resample, opusenc/dec,
+#   appsrc/appsink (capture + record + audio branches)
+# - plugins-good: v4l2src (the camera), videoflip, mp4mux, qtdemux,
+#   pulsesrc (microphone), level (record meter)
+# - plugins-bad: h264parse (REQUIRED by mp4mux — records break without
+#   it) and openh264enc/dec (encoder fallback + gallery thumbnails)
+depends = "$auto, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad"
+# x264enc is the preferred encoder (better quality/compression than
+# the openh264enc fallback) but the recorder works without it.
+recommends = "gstreamer1.0-plugins-ugly"
+# cargo-deb adds the single leading space itself — writing indented
+# lines here produced double spaces (lintian). Keep them flush-left.
+extended-description = """
+HiView turns a USB microscope into a workstation: live view, noise-
+reduced photos, video recording with optional microphone audio, an
+integrated gallery, calibrated millimetre measurements and support
+for the microscope's physical Snap button (optional daemon).
+"""
+assets = [
+    [
+        "target/release/hiview-app",
+        "usr/bin/hiview",
+        "755",
+    ],
+    [
+        "../../data/br.com.mundotela.HiView.desktop",
+        "usr/share/applications/br.com.mundotela.HiView.desktop",
+        "644",
+    ],
+    [
+        "../../data/icons/br.com.mundotela.HiView.svg",
+        "usr/share/icons/hicolor/scalable/apps/br.com.mundotela.HiView.svg",
+        "644",
+    ],
+    [
+        "../../data/icons/br.com.mundotela.HiView-symbolic.svg",
+        "usr/share/icons/hicolor/symbolic/apps/br.com.mundotela.HiView-symbolic.svg",
+        "644",
+    ],
+    [
+        "../../data/br.com.mundotela.HiView.metainfo.xml",
+        "usr/share/metainfo/br.com.mundotela.HiView.metainfo.xml",
+        "644",
+    ],
+    [
+        "../../README.md",
+        "usr/share/doc/hiview/README.md",
+        "644",
+    ],
+    [
+        "../../docs/USER_MANUAL.md",
+        "usr/share/doc/hiview/USER_MANUAL.md",
+        "644",
+    ],
+    # data/hiview.1.gz is `gzip -9n` of data/hiview.1 — regenerate it
+    # whenever the man page source changes.
+    [
+        "../../data/hiview.1.gz",
+        "usr/share/man/man1/hiview.1.gz",
+        "644",
+    ],
+]

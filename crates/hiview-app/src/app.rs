@@ -156,57 +156,12 @@ relm4::new_stateless_action!(ToggleCrossAction, WindowActionGroup, "toggle-cross
 relm4::new_stateless_action!(MeasureRulerAction, WindowActionGroup, "measure-ruler");
 relm4::new_stateless_action!(MeasureAngleAction, WindowActionGroup, "measure-angle");
 relm4::new_stateless_action!(MeasureCircleAction, WindowActionGroup, "measure-circle");
+relm4::new_stateless_action!(ShortcutsAction, WindowActionGroup, "shortcuts");
+relm4::new_stateless_action!(AboutAction, WindowActionGroup, "about");
+relm4::new_stateless_action!(TourAction, WindowActionGroup, "tour");
+relm4::new_stateless_action!(QuitAction, WindowActionGroup, "quit");
 
-/// Keymap for the `win.*` actions (CONVENTIONS §13) — the single
-/// source of truth used by the window's capture-phase key controller.
-/// Returns the full action name (e.g. `"win.toggle-grid"`); `None`
-/// means the key is not a shortcut and must propagate. `Ctrl`
-/// shortcuts are matched first so `Ctrl+G` opens the gallery rather
-/// than toggling the grid; other modifiers (`Alt`, `Super`) make a
-/// key not-a-shortcut.
-fn shortcut_action(key: gtk::gdk::Key, state: gtk::gdk::ModifierType) -> Option<&'static str> {
-    use gtk::gdk::Key;
-    if state.contains(gtk::gdk::ModifierType::CONTROL_MASK) {
-        return match key.to_lower() {
-            k if k == Key::comma => Some("win.preferences"),
-            k if k == Key::g => Some("win.gallery"),
-            _ => None,
-        };
-    }
-    if state.intersects(
-        gtk::gdk::ModifierType::ALT_MASK
-            | gtk::gdk::ModifierType::SUPER_MASK
-            | gtk::gdk::ModifierType::HYPER_MASK
-            | gtk::gdk::ModifierType::META_MASK,
-    ) {
-        return None;
-    }
-    match key.to_lower() {
-        k if k == Key::plus || k == Key::equal || k == Key::KP_Add => Some("win.zoom-in"),
-        k if k == Key::minus || k == Key::KP_Subtract => Some("win.zoom-out"),
-        k if k == Key::_0 || k == Key::KP_0 => Some("win.fit-view"),
-        k if k == Key::_1 || k == Key::KP_1 => Some("win.zoom-100"),
-        k if k == Key::h => Some("win.mirror-h"),
-        k if k == Key::v => Some("win.mirror-v"),
-        k if k == Key::bracketleft => Some("win.rotate-ccw"),
-        k if k == Key::bracketright => Some("win.rotate-cw"),
-        k if k == Key::f => Some("win.freeze"),
-        k if k == Key::F11 => Some("win.fullscreen"),
-        k if k == Key::Escape => Some("win.escape"),
-        k if k == Key::space => Some("win.take-photo"),
-        k if k == Key::r && state.contains(gtk::gdk::ModifierType::SHIFT_MASK) => {
-            Some("win.toggle-mic")
-        }
-        k if k == Key::r => Some("win.record"),
-        k if k == Key::m => Some("win.toggle-mode"),
-        k if k == Key::g => Some("win.toggle-grid"),
-        k if k == Key::c => Some("win.toggle-crosshair"),
-        k if k == Key::l => Some("win.measure-ruler"),
-        k if k == Key::a => Some("win.measure-angle"),
-        k if k == Key::o => Some("win.measure-circle"),
-        _ => None,
-    }
-}
+use crate::shortcuts::shortcut_action;
 
 /// Which capture the floating shutter button performs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -278,6 +233,14 @@ pub enum Input {
     PhotoDone(PhotoOutcome),
     /// Open the preferences dialog (`Ctrl+,`).
     OpenPreferences,
+    /// Open the keyboard shortcuts window (`Ctrl+?` or menu).
+    OpenShortcuts,
+    /// Open the About dialog (menu).
+    OpenAbout,
+    /// Open the welcome tour (menu; also auto-shown on first run).
+    OpenTour,
+    /// The tour was closed by any path — persist `tour_seen`.
+    TourFinished,
     /// Photo format combo changed (0 = PNG, 1 = JPEG).
     SetPhotoFormat(u32),
     /// Resolution combo changed (0 = native, 1 = 1280x960, 2 = 1600x1200).
@@ -392,7 +355,10 @@ pub struct AppModel {
     viewport: Viewport,
     menu_model: gio::Menu,
     /// Camera-list signature the current menu model was built from.
-    menu_signature: Vec<String>,
+    /// `None` until the menu is first built, so an empty camera list
+    /// still produces a menu.
+    menu_signature: Option<Vec<String>>,
+
     /// MenuButton handle, updated imperatively only on real changes.
     menu_button: gtk::MenuButton,
     /// Whether the FPS badge is enabled (debug builds or `--debug-overlay`).
@@ -566,7 +532,7 @@ impl SimpleComponent for AppModel {
                                 pack_end = &gtk::MenuButton {
                                     set_icon_name: "open-menu-symbolic",
                                     set_tooltip_text: Some(strings::CAMERA_MENU_TOOLTIP),
-                                    set_visible: model.camera.has_camera_menu(),
+                                    set_visible: true,
                                     set_menu_model: Some(&model.menu_model),
                                 },
                             },
@@ -1062,7 +1028,7 @@ impl SimpleComponent for AppModel {
             video_page: gtk::Overlay::new(),
             viewport: Viewport::new(),
             menu_model: gio::Menu::new(),
-            menu_signature: Vec::new(),
+            menu_signature: None,
             menu_button: gtk::MenuButton::new(),
             show_fps: cfg!(debug_assertions) || init.debug_overlay,
             fps_label: String::new(),
@@ -1209,6 +1175,10 @@ impl SimpleComponent for AppModel {
         view_action!(MeasureRulerAction, Input::ArmMeasure(MeasureTool::Ruler));
         view_action!(MeasureAngleAction, Input::ArmMeasure(MeasureTool::Angle));
         view_action!(MeasureCircleAction, Input::ArmMeasure(MeasureTool::Circle));
+        view_action!(ShortcutsAction, Input::OpenShortcuts);
+        view_action!(AboutAction, Input::OpenAbout);
+        view_action!(TourAction, Input::OpenTour);
+        view_action!(QuitAction, Input::CloseRequested);
 
         // The window must finalize a running recording (EOS sequence)
         // before it may close — see Input::CloseRequested.
@@ -1264,6 +1234,13 @@ impl SimpleComponent for AppModel {
             }
         });
         root.add_controller(keys);
+
+        // First run only (M11): the welcome tour presents itself once;
+        // any close path sets `tour_seen` and it stays reachable from
+        // the ☰ menu.
+        if !model.config.ui.tour_seen {
+            model.open_tour(&sender);
+        }
 
         ComponentParts { model, widgets }
     }
@@ -1411,6 +1388,15 @@ impl SimpleComponent for AppModel {
             }
             Input::PhotoDone(outcome) => self.on_photo_done(outcome),
             Input::OpenPreferences => self.open_preferences(&sender),
+            Input::OpenShortcuts => self.open_shortcuts(),
+            Input::OpenAbout => self.open_about(),
+            Input::OpenTour => self.open_tour(&sender),
+            Input::TourFinished => {
+                if !self.config.ui.tour_seen {
+                    self.config.ui.tour_seen = true;
+                    self.persist_config();
+                }
+            }
             Input::SetPhotoFormat(sel) => {
                 self.config.photo.format = match sel {
                     1 => PhotoFormat::Jpeg,
@@ -1772,7 +1758,19 @@ impl AppModel {
         let page: &gtk::Widget = match self.state {
             CameraState::Searching | CameraState::Starting => self.searching_page.upcast_ref(),
             CameraState::Disconnected => self.disconnected_page.upcast_ref(),
-            CameraState::Error => self.error_page.upcast_ref(),
+            CameraState::Error => {
+                if self.camera.discovery_error().is_some() {
+                    self.error_page.set_title(strings::DISCOVERY_ERROR_TITLE);
+                    self.error_page
+                        .set_description(Some(strings::DISCOVERY_ERROR_DESCRIPTION));
+                } else {
+                    self.error_page.set_title(strings::ERROR_TITLE);
+                    self.error_page
+                        .set_description(Some(strings::ERROR_DESCRIPTION));
+                }
+                self.error_page.upcast_ref()
+            }
+
             CameraState::Streaming => self.video_page.upcast_ref(),
         };
         self.content_stack.set_visible_child(page);
@@ -2094,9 +2092,9 @@ impl AppModel {
     }
 
     /// Whether the camera list changed since the menu was last built
-    /// (pure, unit-tested).
-    fn menu_needs_rebuild(previous: &[String], cameras: &[CameraDescriptor]) -> bool {
-        previous != Self::camera_menu_signature(cameras)
+    /// (pure, unit-tested). `None` means the menu was never built.
+    fn menu_needs_rebuild(previous: &Option<Vec<String>>, cameras: &[CameraDescriptor]) -> bool {
+        previous.as_ref() != Some(&Self::camera_menu_signature(cameras))
     }
 
     /// Rebuilds the menu model only when the camera list actually
@@ -2106,28 +2104,42 @@ impl AppModel {
         if !Self::menu_needs_rebuild(&self.menu_signature, self.camera.cameras()) {
             return;
         }
-        self.menu_signature = Self::camera_menu_signature(self.camera.cameras());
-        let cameras_menu = gio::Menu::new();
-        cameras_menu.append_item(
-            &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
-                strings::CAMERA_AUTO_LABEL,
-                &AUTO_TARGET.to_string(),
-            ),
-        );
-        for camera in self.camera.cameras() {
-            let (label, target) = Self::camera_menu_entry(camera, self.camera.cameras());
-            cameras_menu.append_item(
-                &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(&label, &target),
-            );
-        }
+        self.menu_signature = Some(Self::camera_menu_signature(self.camera.cameras()));
         let menu = gio::Menu::new();
-        menu.append_submenu(Some(strings::CAMERA_SUBMENU_LABEL), &cameras_menu);
+        if self.camera.has_camera_menu() {
+            let cameras_menu = gio::Menu::new();
+            cameras_menu.append_item(
+                &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
+                    strings::CAMERA_AUTO_LABEL,
+                    &AUTO_TARGET.to_string(),
+                ),
+            );
+            for camera in self.camera.cameras() {
+                let (label, target) = Self::camera_menu_entry(camera, self.camera.cameras());
+                cameras_menu.append_item(
+                    &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
+                        &label, &target,
+                    ),
+                );
+            }
+            menu.append_submenu(Some(strings::CAMERA_SUBMENU_LABEL), &cameras_menu);
+        }
         menu.append_item(&RelmAction::<PreferencesAction>::to_menu_item(
             strings::PREFERENCES_LABEL,
         ));
+        menu.append_item(&RelmAction::<ShortcutsAction>::to_menu_item(
+            strings::SHORTCUTS_LABEL,
+        ));
+        menu.append_item(&RelmAction::<TourAction>::to_menu_item(
+            strings::TOUR_MENU_LABEL,
+        ));
+        menu.append_item(&RelmAction::<AboutAction>::to_menu_item(
+            strings::ABOUT_LABEL,
+        ));
+        menu.append_item(&RelmAction::<QuitAction>::to_menu_item(strings::QUIT_LABEL));
         self.menu_model = menu.clone();
         self.menu_button.set_menu_model(Some(&menu));
-        self.menu_button.set_visible(self.camera.has_camera_menu());
+        self.menu_button.set_visible(true);
     }
 
     /// Sliding-window FPS counter over the last second of rendered frames.
@@ -3098,6 +3110,42 @@ impl AppModel {
         crate::focus::watch_dialog(dialog.upcast_ref::<adw::Dialog>(), &self.viewport);
         dialog.present(Some(&self.window));
     }
+
+    /// Builds and presents the keyboard shortcuts window (`Ctrl+?`
+    /// or the menu). Rows come from `shortcuts::SHORTCUTS` — the same
+    /// table the key matcher uses (M11).
+    fn open_shortcuts(&mut self) {
+        #[allow(deprecated)]
+        let window = crate::shortcuts::build_window();
+        window.set_transient_for(Some(&self.window));
+        window.set_modal(true);
+        window.set_title(Some(strings::SHORTCUTS_LABEL));
+        // Focus lands back on the viewport when the window closes so
+        // single-key shortcuts keep working (CONVENTIONS §7).
+        let viewport = self.viewport.clone();
+        window.connect_destroy(move |_| {
+            viewport.grab_focus();
+        });
+        window.present();
+    }
+
+    /// Builds and presents the About dialog (M11).
+    fn open_about(&mut self) {
+        crate::about::build().present(Some(&self.window));
+    }
+
+    /// Builds and presents the welcome tour — on first run and from
+    /// the menu (M11). Closing it (any way) marks the tour as seen.
+    fn open_tour(&mut self, sender: &ComponentSender<Self>) {
+        let dialog = crate::tour::build({
+            let tx = sender.input_sender().clone();
+            move || {
+                let _ = tx.send(Input::TourFinished);
+            }
+        });
+        crate::focus::watch_dialog(&dialog, &self.viewport);
+        dialog.present(Some(&self.window));
+    }
 }
 
 /// Logs the visible widget tree (window → content → …) at debug level.
@@ -3170,13 +3218,24 @@ pub(crate) mod tests {
         let a = fake_camera("HD camera", "/dev/video0", Some("p1"));
         let b = fake_camera("HD camera", "/dev/video2", Some("p2"));
         let cams = [a.clone(), b.clone()];
-        let sig = AppModel::camera_menu_signature(&cams);
+        let sig = Some(AppModel::camera_menu_signature(&cams));
         // A frame update does not touch the camera list: no rebuild.
         assert!(!AppModel::menu_needs_rebuild(&sig, &cams));
         // Hotplug or a name collision changes the signature: rebuild.
         let after = [b, fake_camera("Other cam", "/dev/video4", Some("p3"))];
         assert!(AppModel::menu_needs_rebuild(&sig, &after));
         assert!(AppModel::menu_needs_rebuild(&sig, std::slice::from_ref(&a)));
+    }
+
+    /// The menu must exist even with zero cameras (M11 fix): before the
+    /// first build the signature is `None`, which forces a rebuild —
+    /// otherwise an empty camera list would match an empty signature
+    /// and the menu would never appear.
+    #[test]
+    fn menu_builds_even_without_cameras() {
+        assert!(AppModel::menu_needs_rebuild(&None, &[]));
+        let sig = Some(AppModel::camera_menu_signature(&[]));
+        assert!(!AppModel::menu_needs_rebuild(&sig, &[]));
     }
 
     #[test]

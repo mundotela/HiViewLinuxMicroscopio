@@ -911,7 +911,7 @@ checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
 
 [[package]]
 name = "hiview-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "gtk4",
@@ -929,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "hiview-button"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "evdev",
  "hiview-core",
@@ -940,7 +940,7 @@ dependencies = [
 
 [[package]]
 name = "hiview-buttond"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "hiview-core",
@@ -953,13 +953,14 @@ dependencies = [
 
 [[package]]
 name = "hiview-capture"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-pbutils",
  "gstreamer-video",
+ "hiview-capture",
  "hiview-core",
  "image",
  "tempfile",
@@ -970,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "hiview-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "image",

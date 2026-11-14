@@ -42,6 +42,11 @@ pub enum Error {
     #[error("device {0} exposes no usable capture format")]
     NoCaptureFormat(String),
 
+    /// The `v4l2deviceprovider` GStreamer plugin is missing or failed to
+    /// start, so camera nodes cannot be probed at all.
+    #[error("v4l2 device provider unavailable: {0}")]
+    NoV4l2Provider(String),
+
     /// The given device node could not be described as a video device.
     #[error("video device description failed: {0}")]
     VideoDevice(String),

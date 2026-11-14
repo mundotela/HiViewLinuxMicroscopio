@@ -1,0 +1,66 @@
+.TH HIVIEW 1 "13 de novembro de 2026" "hiview 1.0.0" "Comandos do usuário"
+.SH NOME
+hiview \- visualizador para microscópios USB: foto, vídeo e medição
+.SH SINOPSE
+.B hiview
+.RI [ OPÇÕES ]
+.SH DESCRIÇÃO
+.B HiView
+transforma um microscópio USB (UVC) em uma estação de trabalho:
+visualização ao vivo com zoom, rotação, espelhamento e congelamento;
+fotos com redução de ruído opcional; gravação de vídeo MP4 com áudio
+de microfone opcional; galeria integrada; e medições calibradas em
+milímetros no modo Bancada.
+.PP
+Sem argumentos, o HiView abre a interface gráfica usando o primeiro
+microscópio UVC encontrado.
+.SH OPÇÕES
+.TP
+.BI \-\-source " FONTE"
+Seleciona a fonte de captura de vídeo. Valores:
+.BR device
+(o microscópio real; padrão),
+.BR test
+(imagem sintética, sem hardware) ou
+.BI file: CAMINHO
+(reproduz um arquivo em loop).
+.TP
+.B \-\-debug\-overlay
+Ativa a sobreposição de depuração do GTK
+.RB ( gtk\-debug\-overlay ,
+estatísticas de renderização), o selo de FPS na janela e o contador
+de quadros perdidos durante a gravação.
+.TP
+.B \-\-help
+Mostra a ajuda e sai.
+.TP
+.B \-\-version
+Mostra a versão e sai.
+.SH AMBIENTE
+.TP
+.B RUST_LOG
+Nível de log do
+.BR tracing
+(padrão:
+.BR info ).
+.SH ARQUIVOS
+.TP
+.I ~/.config/hiview/config.toml
+Configuração persistente (preferências, calibrações, estado do tour).
+.TP
+.I ~/Imagens/HiView/
+Pasta padrão das fotos (configurável em Preferências).
+.TP
+.I ~/Vídeos/HiView/
+Pasta padrão dos vídeos gravados.
+.TP
+.I /run/hiview/button.sock
+Soquete do serviço opcional
+.BR hiview\-buttond ,
+que publica os eventos do botão físico Snap.
+.SH VEJA TAMBÉM
+.BR gst\-launch\-1.0 (1),
+.BR systemd (1)
+.PP
+Manual do usuário completo:
+.IR /usr/share/doc/hiview/USER_MANUAL.md .
