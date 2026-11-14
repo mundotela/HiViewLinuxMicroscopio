@@ -28,3 +28,15 @@ pub fn is_known_microscope(vid: u16, pid: u16) -> bool {
         .iter()
         .any(|m| m.vid == vid && m.pid == pid)
 }
+
+/// Per-device config key of the primary microscope (`"VID:PID"` —
+/// §6.12). Calibration profiles created before M12 have no `device`
+/// field and migrate to this key.
+pub const MICROSCOPE_DEVICE_KEY: &str = "05e3:f12a";
+
+/// The per-device config key for a USB identity (`"vid:pid"` in lower
+/// hex) — shared by image adjustments (§6.11) and calibration (§6.9).
+#[must_use]
+pub fn usb_device_key(vid: u16, pid: u16) -> String {
+    format!("{vid:04x}:{pid:04x}")
+}

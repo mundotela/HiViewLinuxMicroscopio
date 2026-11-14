@@ -60,6 +60,11 @@ pub enum PhotoResolution {
     X2p5,
 }
 
+/// Largest interpolated output offered to the user (M12): the
+/// microscope's own 2.5× result, so every option it used to have is
+/// still offered for it.
+const MAX_INTERPOLATED: (u32, u32) = (1600, 1200);
+
 impl PhotoResolution {
     /// Output pixel size for a source of `(width, height)`.
     #[must_use]
@@ -69,6 +74,23 @@ impl PhotoResolution {
             Self::X2 => (src.0 * 2, src.1 * 2),
             Self::X2p5 => (src.0 * 5 / 2, src.1 * 5 / 2),
         }
+    }
+
+    /// Options offered for a camera of `native` pixel size (M12):
+    /// `Native` always; an interpolated option only when its result
+    /// fits the 1600×1200 box — which is exactly what the
+    /// microscope's 640×480 yields, so its choices are unchanged.
+    /// A 1280×720 webcam gets `Native` only (2× would be 2560×1440).
+    #[must_use]
+    pub fn available_for(native: (u32, u32)) -> Vec<Self> {
+        let fits = |out: (u32, u32)| {
+            let (long, short) = (out.0.max(out.1), out.0.min(out.1));
+            long <= MAX_INTERPOLATED.0 && short <= MAX_INTERPOLATED.1
+        };
+        [Self::Native, Self::X2, Self::X2p5]
+            .into_iter()
+            .filter(|r| *r == Self::Native || fits(r.output_size(native)))
+            .collect()
     }
 }
 
