@@ -39,11 +39,10 @@ pub const ERROR_DESCRIPTION: &str =
     "Verifique se o microscópio está conectado e se nenhum outro programa está usando a câmera.";
 
 /// Status page title when camera discovery itself failed.
-/// StatusPage shown when no microscope is connected but other
-/// cameras exist (M12 — it points to the Câmera menu).
-pub const NO_MICROSCOPE_TITLE: &str = "Microscópio não encontrado";
-
-pub const NO_MICROSCOPE_DESCRIPTION: &str = "Conecte o microscópio a uma porta USB.\nVocê também pode usar outra câmera pelo menu ☰ → Câmera.";
+/// Hint appended to the searching page while another camera
+/// exists (M12 — the choice is always via the Câmera menu).
+pub const SEARCHING_OTHER_CAMERA_HINT: &str =
+    "Você também pode usar outra câmera pelo menu ☰ → Câmera.";
 
 /// Toast when the microscope is hot-plugged while another camera is
 /// streaming — never switches by itself (M12).

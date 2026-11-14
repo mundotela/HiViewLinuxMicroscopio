@@ -351,9 +351,6 @@ pub struct AppModel {
     // switching). All UI *state* lives in the fields above.
     content_stack: gtk::Stack,
     searching_page: adw::StatusPage,
-    /// "Microscópio não encontrado" — shown instead of `searching`
-    /// when other cameras exist (M12).
-    no_microscope_page: adw::StatusPage,
     disconnected_page: adw::StatusPage,
     error_page: adw::StatusPage,
     video_page: gtk::Overlay,
@@ -693,13 +690,6 @@ impl SimpleComponent for AppModel {
                         set_description: Some(strings::SEARCHING_DESCRIPTION),
                     },
 
-                    #[name = "no_microscope_page"]
-                    add_child = &adw::StatusPage {
-                        set_icon_name: Some(strings::DISCONNECTED_ICON),
-                        set_title: strings::NO_MICROSCOPE_TITLE,
-                        set_description: Some(strings::NO_MICROSCOPE_DESCRIPTION),
-
-                    },
 
                     #[name = "disconnected_page"]
                     add_child = &adw::StatusPage {
@@ -1044,7 +1034,6 @@ impl SimpleComponent for AppModel {
             window: root.clone(),
             content_stack: gtk::Stack::new(),
             searching_page: adw::StatusPage::new(),
-            no_microscope_page: adw::StatusPage::new(),
             disconnected_page: adw::StatusPage::new(),
             error_page: adw::StatusPage::new(),
             video_page: gtk::Overlay::new(),
@@ -1818,7 +1807,6 @@ impl AppModel {
     fn grab_widgets(&mut self, widgets: &<Self as SimpleComponent>::Widgets) {
         self.content_stack = widgets.content_stack.clone();
         self.searching_page = widgets.searching_page.clone();
-        self.no_microscope_page = widgets.no_microscope_page.clone();
         self.disconnected_page = widgets.disconnected_page.clone();
         self.error_page = widgets.error_page.clone();
         self.video_page = widgets.video_page.clone();
@@ -1839,21 +1827,40 @@ impl AppModel {
         // placeholder overlays stay `None` (hidden) until this runs.
         self.apply_overlays();
         self.install_focus_return();
+        // No camera event fires when nothing is plugged — without this
+        // the stack would sit on the placeholder page and text
+        // forever (the M12 alternatives hint never reached).
+        self.on_state_change();
+    }
+
+    /// Searching-page description (pure, unit-tested): the base
+    /// text gains the menu hint only while another camera exists.
+    fn searching_description(alternatives: bool) -> String {
+        if alternatives {
+            format!(
+                "{} {}",
+                strings::SEARCHING_DESCRIPTION,
+                strings::SEARCHING_OTHER_CAMERA_HINT
+            )
+        } else {
+            strings::SEARCHING_DESCRIPTION.to_string()
+        }
     }
 
     /// Syncs derived UI after a camera state change.
     fn on_state_change(&mut self) {
         self.state = self.camera.state();
         let page: &gtk::Widget = match self.state {
-            CameraState::Searching | CameraState::Starting | CameraState::Disconnected
-                if self.camera.offers_alternatives() =>
-            {
-                // No microscope but other cameras exist (M12): offer
-                // them instead of searching forever. The button
-                // names the camera when there is exactly one.
-                self.no_microscope_page.upcast_ref()
+            CameraState::Searching | CameraState::Starting => {
+                // M12: with other cameras available the searching
+                // page also points to the Câmera menu; with none it
+                // keeps the plain "connect it" text.
+                self.searching_page
+                    .set_description(Some(&Self::searching_description(
+                        self.camera.offers_alternatives(),
+                    )));
+                self.searching_page.upcast_ref()
             }
-            CameraState::Searching | CameraState::Starting => self.searching_page.upcast_ref(),
             CameraState::Disconnected => self.disconnected_page.upcast_ref(),
             CameraState::Error => {
                 if self.camera.discovery_error().is_some() {
@@ -1871,6 +1878,12 @@ impl AppModel {
             CameraState::Streaming => self.video_page.upcast_ref(),
         };
         self.content_stack.set_visible_child(page);
+        tracing::debug!(
+            "camera state {:?}: alternatives={}, searching_desc={:?}",
+            self.state,
+            self.camera.offers_alternatives(),
+            self.searching_page.description(),
+        );
         self.maybe_apply_stored_adjust();
         if self.state != CameraState::Streaming {
             self.viewport.reset();
@@ -3395,6 +3408,19 @@ pub(crate) mod tests {
         assert!(AppModel::menu_needs_rebuild(&None, &[], None));
         let sig = Some(AppModel::camera_menu_signature(&[], None));
         assert!(!AppModel::menu_needs_rebuild(&sig, &[], None));
+    }
+
+    /// M12: the searching page carries the menu hint only while
+    /// another camera exists — with none, the plain text stays.
+    #[test]
+    fn searching_page_gains_menu_hint_only_with_alternatives() {
+        let with = AppModel::searching_description(true);
+        assert!(with.contains(strings::SEARCHING_DESCRIPTION));
+        assert!(with.contains(strings::SEARCHING_OTHER_CAMERA_HINT));
+        assert_eq!(
+            AppModel::searching_description(false),
+            strings::SEARCHING_DESCRIPTION
+        );
     }
 
     #[test]
