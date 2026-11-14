@@ -139,10 +139,9 @@ O HiView também funciona com outras câmeras USB — a webcam do
 notebook, por exemplo.
 
 - **Abriu sem o microscópio?** A tela **"Microscópio não
-  encontrado"** mostra o botão **"Usar outra câmera"** (ou **"Usar
-  ‹nome›"**, se houver só uma). Escolher a câmera abre a imagem
-  normalmente. Se você plugar o microscópio *antes* de escolher, ele
-  abre sozinho, como sempre.
+  encontrado"** avisa que você pode usar outra câmera: abra o menu
+  ☰ → **Câmera** e escolha. Se você plugar o microscópio *antes* de
+  escolher, ele abre sozinho, como sempre.
 - **Trocar depois:** menu ☰ → **Câmera** — a lista mostra todas as
   câmeras, a que está em uso vem marcada com **✓** e o microscópio
   aparece como "Microscópio (05e3:f12a)".
@@ -430,7 +429,7 @@ Dica: congele a imagem (`F`) antes de medir para ter mais precisão.
 |---|---|
 | O app não encontra nenhuma câmera | Confira se o cabo USB está bem encaixado (troque de porta). Seu usuário precisa estar no grupo `video`: rode `groups` no terminal e, se `video` não aparecer, rode `sudo usermod -aG video <seu-usuário>` e faça logout/login. Verifique também se outro app está usando a câmera (Cheese, navegador, chamada de vídeo) — feche-o e reabra o HiView |
 | "Procurando microscópio…" não sai | Troque de porta USB. Teste `v4l2-ctl --list-devices` no terminal: o microscópio aparece como "HD camera" |
-| "Microscópio não encontrado" | O microscópio não está plugado — plugue-o (ele abre sozinho) ou clique em **"Usar outra câmera"** para trabalhar com a webcam |
+| "Microscópio não encontrado" | O microscópio não está plugado — plugue-o (ele abre sozinho) ou use outra câmera pelo menu ☰ → **Câmera** |
 | "Não foi possível listar as câmeras" | Falta o plugin de vídeo do GStreamer: `sudo apt install gstreamer1.0-plugins-good` e reabra o app |
 | Aparece a webcam em vez do microscópio | Menu ☰ → Câmera → escolha "Microscópio (05e3:f12a)". Se o microscópio acabou de ser plugado, use o botão **"Usar"** do aviso "Microscópio conectado" |
 | Não consigo trocar de câmera | A troca fica bloqueada durante uma gravação — pare a gravação primeiro |

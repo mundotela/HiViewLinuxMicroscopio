@@ -181,9 +181,6 @@ pub enum Input {
     FrameReady,
     /// The user picked an entry in the camera menu.
     SelectCamera(String),
-    /// "Usar outra câmera" on the no-microscope page (M12): one
-    /// camera → picks it directly, more → opens the picker dialog.
-    UseOtherCamera,
     /// "Usar" action of the microscope-connected toast (M12).
     UseMicroscope,
     /// Zoom in around the widget center (`+`).
@@ -357,9 +354,6 @@ pub struct AppModel {
     /// "Microscópio não encontrado" — shown instead of `searching`
     /// when other cameras exist (M12).
     no_microscope_page: adw::StatusPage,
-    /// Its action button — the label names the single camera or
-    /// reads "Usar outra câmera" when there are several.
-    no_microscope_button: gtk::Button,
     disconnected_page: adw::StatusPage,
     error_page: adw::StatusPage,
     video_page: gtk::Overlay,
@@ -705,15 +699,6 @@ impl SimpleComponent for AppModel {
                         set_title: strings::NO_MICROSCOPE_TITLE,
                         set_description: Some(strings::NO_MICROSCOPE_DESCRIPTION),
 
-                        #[name = "no_microscope_button"]
-                        #[wrap(Some)]
-                        set_child = &gtk::Button {
-                            set_label: strings::USE_OTHER_CAMERA,
-                            set_halign: gtk::Align::Center,
-                            add_css_class: "suggested-action",
-                            add_css_class: "pill",
-                            connect_clicked => Input::UseOtherCamera,
-                        },
                     },
 
                     #[name = "disconnected_page"]
@@ -1060,7 +1045,6 @@ impl SimpleComponent for AppModel {
             content_stack: gtk::Stack::new(),
             searching_page: adw::StatusPage::new(),
             no_microscope_page: adw::StatusPage::new(),
-            no_microscope_button: gtk::Button::new(),
             disconnected_page: adw::StatusPage::new(),
             error_page: adw::StatusPage::new(),
             video_page: gtk::Overlay::new(),
@@ -1335,15 +1319,6 @@ impl SimpleComponent for AppModel {
                     self.camera.select(&target);
                     self.on_state_change();
                     self.ensure_button_source(&sender);
-                }
-            }
-            Input::UseOtherCamera => {
-                // The no-microscope page action (M12): a single
-                // camera picks itself; several open the picker.
-                let cameras = self.camera.cameras();
-                match cameras {
-                    [only] => sender.input(Input::SelectCamera(only.stable_id())),
-                    _ => self.open_camera_picker(&sender),
                 }
             }
             Input::UseMicroscope => {
@@ -1844,7 +1819,6 @@ impl AppModel {
         self.content_stack = widgets.content_stack.clone();
         self.searching_page = widgets.searching_page.clone();
         self.no_microscope_page = widgets.no_microscope_page.clone();
-        self.no_microscope_button = widgets.no_microscope_button.clone();
         self.disconnected_page = widgets.disconnected_page.clone();
         self.error_page = widgets.error_page.clone();
         self.video_page = widgets.video_page.clone();
@@ -1877,11 +1851,6 @@ impl AppModel {
                 // No microscope but other cameras exist (M12): offer
                 // them instead of searching forever. The button
                 // names the camera when there is exactly one.
-                let label = match self.camera.cameras() {
-                    [only] => strings::use_camera_label(only.display_name()),
-                    _ => strings::USE_OTHER_CAMERA.to_string(),
-                };
-                self.no_microscope_button.set_label(&label);
                 self.no_microscope_page.upcast_ref()
             }
             CameraState::Searching | CameraState::Starting => self.searching_page.upcast_ref(),
@@ -2197,31 +2166,6 @@ impl AppModel {
         } else {
             self.video_page.remove_css_class("frozen-view");
         }
-    }
-
-    /// Camera picker dialog for the no-microscope page (M12): one
-    /// response per available camera plus "Cancelar"; choosing a
-    /// camera dispatches the usual `SelectCamera`.
-    fn open_camera_picker(&self, sender: &ComponentSender<Self>) {
-        let dialog = adw::AlertDialog::builder()
-            .heading(strings::CAMERA_SUBMENU_LABEL)
-            .build();
-        for camera in self.camera.cameras() {
-            dialog.add_response(&camera.stable_id(), camera.display_name());
-        }
-        dialog.add_response("cancel", strings::CANCEL_BUTTON);
-        dialog.set_default_response(Some("cancel"));
-        dialog.set_close_response("cancel");
-        let sender = sender.clone();
-        dialog.choose(
-            Some(&self.window),
-            gtk::gio::Cancellable::NONE,
-            move |response| {
-                if response != "cancel" {
-                    sender.input(Input::SelectCamera(response.to_string()));
-                }
-            },
-        );
     }
 
     /// Menu entry (label, action target) for one camera (pure, unit-tested):
