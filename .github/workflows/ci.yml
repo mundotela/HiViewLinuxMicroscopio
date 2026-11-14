@@ -72,9 +72,8 @@ jobs:
           cargo deb -p hiview-buttond
 
       - name: Lintian
-        run: lintian target/debian/*.deb || true
-        # Warnings are triaged by the engineering review (M11 report);
-        # the step stays advisory until the baseline is clean.
+        # Errors (E:) fail the build; warnings stay informational.
+        run: lintian --fail-on error target/debian/*.deb
 
       - name: Upload .deb artifacts
         uses: actions/upload-artifact@v4
