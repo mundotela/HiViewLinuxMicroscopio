@@ -150,6 +150,8 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - **Nunca** use `/dev/videoN` fixo. O caminho vem sempre de `CameraDescriptor`.
 - **Descoberta de câmeras pelo `v4l2deviceprovider` explícito**, nunca pelo `gst::DeviceMonitor` com os providers padrão: com o `gstreamer1.0-pipewire` instalado (padrão no Ubuntu), o provider do PipeWire esconde o v4l2 e as câmeras chegam sem `device.path` (defeito encontrado no teste de instalação limpa do M11).
 - **Teste em mais de uma distribuição.** O ambiente de desenvolvimento (Pop!_OS) não representa todos os usuários. Mudanças em descoberta, captura ou empacotamento são validadas também num Ubuntu padrão.
+- **Teste também o app aberto sem o microscópio** (só com a webcam e sem câmera nenhuma). O estado inicial da UI é aplicado na inicialização, nunca só por eventos de hotplug (bug do M12).
+- **`.deb` sempre de um binário recém-compilado:** `cargo build --release` imediatamente antes do `cargo deb` (no M12, um pacote saiu com o binário antigo e o teste físico avaliou código velho).
 
 ---
 

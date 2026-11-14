@@ -287,6 +287,16 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 
 ---
 
+## M12 — Outras câmeras (v1.1.0)
+
+> **Concluído em 2026-11-14** (merge `0684202`). O bug foi reportado pelo Henrique na v1.0.0: sem o microscópio, não havia como usar a webcam. A §6.1 já previa a escolha de outra câmera, mas a implementação não cumpria isso, e os testes sempre abriam o app com o microscópio ligado. Relatório em `docs/reports/M12.md`.
+
+**Escopo final** (simplificado a pedido do Henrique; um botão e um diálogo de escolha foram descartados): texto na página "Procurando microscópio…" indicando o menu ☰ → Câmera; menu Câmera com qualquer câmera disponível; troca automática para o microscópio quando ele é conectado (nunca durante uma gravação); calibração por câmera; suporte a MJPG; resolução da foto relativa à câmera ativa.
+
+**Lição:** todo checklist de teste físico inclui **abrir o app sem o microscópio**.
+
+---
+
 ## Backlog (sem milestone)
 
 - Patch upstream do quirk `05e3:f12a` no `uvcvideo`.
@@ -300,6 +310,9 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 - Reportar ao GTK o bug de `translate_coordinates` sem checagem de `native == NULL` (crossing events sobre widgets desparentados; presente no 4.14.5 e no 4.18.6). Evidência em `docs/reports/M5.md`.
 - Galeria: `gio::FileMonitor` para refletir alterações externas nas pastas em tempo real (hoje, a lista é atualizada ao abrir).
 - Galeria: seleção múltipla e arrastar-e-soltar.
+- **CI:** trocar `actions/upload-artifact@v4` pela versão mais nova (aviso do GitHub: Node.js 20 descontinuado nas Actions).
+- **Distribuição (ideias de 2026-11-14):** tornar o repositório público (antes, auditar o histórico em busca de segredos e dados pessoais e pesquisar conflito de marca com o nome "HiView"); Release no GitHub com os `.deb`; repositório apt próprio; Flathub (só o app, sem o serviço root); Debian oficial como meta de longo prazo.
+- **Pendências do M12:** refazer a medição de CPU com a webcam (o relatório diz "≈0% de um núcleo" para YUY2 640×480, número implausível perto dos ~8–9% do microscópio no mesmo formato); o postinst do `hiview-buttond` repete "added to group — log out" em toda atualização, mesmo para quem já está no grupo (checar com `id -nG` antes); o `cargo deb` precisa sempre usar um binário recompilado (no M12, um `.deb` saiu com o binário antigo).
 - **Pacote `hiview-buttond` (pendências do M11):**
   - o postinst deve avisar quando houver uma instalação manual antiga (`/etc/systemd/system/hiview-buttond.service` ou `/usr/local/libexec/hiview-buttond`), que tem prioridade sobre a unit do pacote;
   - o comentário da unit do pacote ainda diz "Installed by scripts/install-buttond.sh";

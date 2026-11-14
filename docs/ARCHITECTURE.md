@@ -1,6 +1,6 @@
 # HiView — Arquitetura
 
-> **Versão:** 1.0 · **Data:** 2026-11-14 · **Status:** HiView 1.0.0 lançado (M0–M11 concluídos)
+> **Versão:** 1.1 · **Data:** 2026-11-14 · **Status:** HiView 1.1.0 (M0–M12 concluídos)
 > **Engenharia:** Henrique (MundoTela Tecnologia) e Claude · **Implementação:** Devin
 > Documentos irmãos: `MILESTONES.md`, `CONVENTIONS.md`, `USER_MANUAL.md`, `DEVIN_REPORT_TEMPLATE.md`
 
@@ -149,7 +149,14 @@ hiview/
 - Enumera o subsistema `video4linux` via crate `udev`. Para cada nó, sobe até o pai `usb_device` e lê `idVendor`/`idProduct`.
 - Filtra os nós com capacidade `V4L2_CAP_VIDEO_CAPTURE` no `device_caps`. Isso descarta o `/dev/video3`, que é de metadados.
 - **Sondagem de formatos pelo `v4l2deviceprovider` explícito** (decisão do M11): `gst::DeviceProviderFactory::by_name("v4l2deviceprovider")`, casando por `device.path`. **Não** use o `gst::DeviceMonitor` com os providers padrão: quando o `gstreamer1.0-pipewire` está instalado (o padrão no Ubuntu GNOME), o `pipewiredeviceprovider` **esconde** o v4l2, e as câmeras chegam sem `device.path`. No teste de instalação limpa, isso deu "0 câmeras" no Ubuntu 24.04. Se o provider v4l2 faltar, o app mostra uma página de erro dedicada, nunca "0 câmeras" em silêncio. A captura continua por `v4l2src`, que coexiste com o PipeWire.
-- **Seleção automática:** prioridade para `05e3:f12a`. Se não houver, a lista mostra todas as câmeras UVC e o usuário escolhe. Uma tabela `KNOWN_MICROSCOPES` em `hiview-core` permite adicionar outros modelos no futuro.
+- **Seleção automática:** prioridade para `05e3:f12a`. Uma tabela `KNOWN_MICROSCOPES` em `hiview-core` permite adicionar outros modelos no futuro.
+- **Outras câmeras (M12, v1.1.0):**
+  - **Sem o microscópio:** a página "Procurando microscópio…" informa, quando há outra câmera, que ela pode ser usada pelo menu ☰ → Câmera. O menu Câmera aparece com qualquer câmera disponível.
+  - **Microscópio conectado depois:** o app troca para ele automaticamente, com aviso, e nunca no meio de uma gravação.
+  - **A escolha manual não persiste:** ao reabrir, a prioridade volta ao microscópio.
+  - **Formatos:** YUY2 até 1280×720 (≥ 25 fps), senão MJPG + `jpegdec`. Nunca acima de 720p por padrão.
+  - **Resolução da foto:** "nativa" é a da câmera ativa; as interpoladas só aparecem se o resultado ficar ≤ 1600×1200.
+  - **Lição do M12:** a página inicial só era atualizada por eventos de hotplug. Sem nenhum evento, ela nunca refletia a enumeração real. Agora o estado é aplicado também na inicialização (`post_view`).
 - **Hotplug:** `udev::MonitorBuilder` no subsistema `video4linux`. Eventos `add`/`remove` viram `CameraEvent::Connected/Disconnected`.
 - O resultado é um `CameraDescriptor { vid, pid, name, dev_node, bus_num, dev_num, usb_path }`. `bus_num`/`dev_num` também são usados pelo helper do botão.
 
@@ -282,6 +289,7 @@ appsrc name=src is-live=true format=time caps=video/x-raw,format=RGBA,width=W,he
   3. O app calcula `px_por_mm` e salva um **perfil nomeado** (ex.: "Anel no máximo").
 - **Incerteza exibida:** ±1 px convertido para µm. A 640×480 isso é relevante e precisa aparecer.
 - **Aviso permanente** no modo Bancada quando há calibração ativa: "Calibração válida apenas se o anel de ampliação e a altura não mudaram desde a calibração."
+- **Calibração por câmera (M12):** cada perfil pertence a um dispositivo (`CalibrationProfile.device`, chave VID:PID ou caminho USB). A calibração de uma câmera **nunca** é aplicada a outra, porque px/mm depende da lente e da distância. Toda câmera pode ser calibrada; enquanto não for, as medidas saem em px, com o aviso "Sem calibração para esta câmera". Os configs da v1.0 foram migrados: os perfis existentes passam a pertencer ao `05e3:f12a`.
 - Pressupõe pixels quadrados. Isso é verificado no teste de aceitação do M8 (medida horizontal × vertical da cruz da lâmina, diferença < 2%).
 
 ### 6.10 Subsistema do botão físico
