@@ -38,8 +38,14 @@ pub const ERROR_TITLE: &str = "Não foi possível iniciar a câmera";
 pub const ERROR_DESCRIPTION: &str =
     "Verifique se o microscópio está conectado e se nenhum outro programa está usando a câmera.";
 
+/// Status page title when camera discovery itself failed.
+pub const DISCOVERY_ERROR_TITLE: &str = "Não foi possível listar as câmeras";
+
+/// Status page description when camera discovery itself failed.
+pub const DISCOVERY_ERROR_DESCRIPTION: &str = "O serviço de vídeo do Linux (v4l2) não respondeu. Reinstale o pacote hiview ou verifique a instalação do GStreamer (gstreamer1.0-plugins-good).";
+
 /// Tooltip of the camera selection menu button.
-pub const CAMERA_MENU_TOOLTIP: &str = "Escolher câmera";
+pub const CAMERA_MENU_TOOLTIP: &str = "Menu";
 
 /// Menu item that restores automatic microscope detection.
 pub const CAMERA_AUTO_LABEL: &str = "Automático";

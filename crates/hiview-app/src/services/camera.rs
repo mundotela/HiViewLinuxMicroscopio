@@ -83,6 +83,10 @@ pub struct CameraService {
     /// Current software image adjustments, reapplied every time a
     /// pipeline starts (docs/ARCHITECTURE.md §6.11).
     adjust: ImageAdjust,
+    /// Set when device enumeration itself failed (e.g. the v4l2
+    /// provider is missing): the UI shows a dedicated error page
+    /// instead of a silent "0 cameras found".
+    discovery_error: Option<String>,
     on_event: Arc<dyn Fn(CameraEvent) + Send + Sync>,
     _watcher: Option<DeviceWatcher>,
 }
@@ -107,6 +111,7 @@ impl CameraService {
             frame_bus,
             orientation: ViewOrientation::default(),
             adjust: ImageAdjust::default(),
+            discovery_error: None,
             on_event,
             _watcher: None,
         };
@@ -127,7 +132,11 @@ impl CameraService {
                     service.cameras = cameras;
                     service.try_start_selected();
                 }
-                Err(err) => error!("camera enumeration failed: {err}"),
+                Err(err) => {
+                    error!("camera enumeration failed: {err}");
+                    service.discovery_error = Some(err.to_string());
+                    service.state = CameraState::Error;
+                }
             }
         }
 
@@ -138,6 +147,14 @@ impl CameraService {
     #[must_use]
     pub fn state(&self) -> CameraState {
         self.state
+    }
+
+    /// Technical detail when device enumeration itself failed (e.g.
+    /// the GStreamer v4l2 provider is missing). `None` when discovery
+    /// succeeded — even with an empty camera list.
+    #[must_use]
+    pub fn discovery_error(&self) -> Option<&str> {
+        self.discovery_error.as_deref()
     }
 
     /// Cameras currently known to the system (device mode only).

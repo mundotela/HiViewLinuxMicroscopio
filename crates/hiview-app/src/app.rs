@@ -355,7 +355,10 @@ pub struct AppModel {
     viewport: Viewport,
     menu_model: gio::Menu,
     /// Camera-list signature the current menu model was built from.
-    menu_signature: Vec<String>,
+    /// `None` until the menu is first built, so an empty camera list
+    /// still produces a menu.
+    menu_signature: Option<Vec<String>>,
+
     /// MenuButton handle, updated imperatively only on real changes.
     menu_button: gtk::MenuButton,
     /// Whether the FPS badge is enabled (debug builds or `--debug-overlay`).
@@ -529,7 +532,7 @@ impl SimpleComponent for AppModel {
                                 pack_end = &gtk::MenuButton {
                                     set_icon_name: "open-menu-symbolic",
                                     set_tooltip_text: Some(strings::CAMERA_MENU_TOOLTIP),
-                                    set_visible: model.camera.has_camera_menu(),
+                                    set_visible: true,
                                     set_menu_model: Some(&model.menu_model),
                                 },
                             },
@@ -1025,7 +1028,7 @@ impl SimpleComponent for AppModel {
             video_page: gtk::Overlay::new(),
             viewport: Viewport::new(),
             menu_model: gio::Menu::new(),
-            menu_signature: Vec::new(),
+            menu_signature: None,
             menu_button: gtk::MenuButton::new(),
             show_fps: cfg!(debug_assertions) || init.debug_overlay,
             fps_label: String::new(),
@@ -1755,7 +1758,19 @@ impl AppModel {
         let page: &gtk::Widget = match self.state {
             CameraState::Searching | CameraState::Starting => self.searching_page.upcast_ref(),
             CameraState::Disconnected => self.disconnected_page.upcast_ref(),
-            CameraState::Error => self.error_page.upcast_ref(),
+            CameraState::Error => {
+                if self.camera.discovery_error().is_some() {
+                    self.error_page.set_title(strings::DISCOVERY_ERROR_TITLE);
+                    self.error_page
+                        .set_description(Some(strings::DISCOVERY_ERROR_DESCRIPTION));
+                } else {
+                    self.error_page.set_title(strings::ERROR_TITLE);
+                    self.error_page
+                        .set_description(Some(strings::ERROR_DESCRIPTION));
+                }
+                self.error_page.upcast_ref()
+            }
+
             CameraState::Streaming => self.video_page.upcast_ref(),
         };
         self.content_stack.set_visible_child(page);
@@ -2077,9 +2092,9 @@ impl AppModel {
     }
 
     /// Whether the camera list changed since the menu was last built
-    /// (pure, unit-tested).
-    fn menu_needs_rebuild(previous: &[String], cameras: &[CameraDescriptor]) -> bool {
-        previous != Self::camera_menu_signature(cameras)
+    /// (pure, unit-tested). `None` means the menu was never built.
+    fn menu_needs_rebuild(previous: &Option<Vec<String>>, cameras: &[CameraDescriptor]) -> bool {
+        previous.as_ref() != Some(&Self::camera_menu_signature(cameras))
     }
 
     /// Rebuilds the menu model only when the camera list actually
@@ -2089,22 +2104,26 @@ impl AppModel {
         if !Self::menu_needs_rebuild(&self.menu_signature, self.camera.cameras()) {
             return;
         }
-        self.menu_signature = Self::camera_menu_signature(self.camera.cameras());
-        let cameras_menu = gio::Menu::new();
-        cameras_menu.append_item(
-            &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
-                strings::CAMERA_AUTO_LABEL,
-                &AUTO_TARGET.to_string(),
-            ),
-        );
-        for camera in self.camera.cameras() {
-            let (label, target) = Self::camera_menu_entry(camera, self.camera.cameras());
-            cameras_menu.append_item(
-                &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(&label, &target),
-            );
-        }
+        self.menu_signature = Some(Self::camera_menu_signature(self.camera.cameras()));
         let menu = gio::Menu::new();
-        menu.append_submenu(Some(strings::CAMERA_SUBMENU_LABEL), &cameras_menu);
+        if self.camera.has_camera_menu() {
+            let cameras_menu = gio::Menu::new();
+            cameras_menu.append_item(
+                &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
+                    strings::CAMERA_AUTO_LABEL,
+                    &AUTO_TARGET.to_string(),
+                ),
+            );
+            for camera in self.camera.cameras() {
+                let (label, target) = Self::camera_menu_entry(camera, self.camera.cameras());
+                cameras_menu.append_item(
+                    &RelmAction::<SelectCameraAction>::to_menu_item_with_target_value(
+                        &label, &target,
+                    ),
+                );
+            }
+            menu.append_submenu(Some(strings::CAMERA_SUBMENU_LABEL), &cameras_menu);
+        }
         menu.append_item(&RelmAction::<PreferencesAction>::to_menu_item(
             strings::PREFERENCES_LABEL,
         ));
@@ -2120,7 +2139,7 @@ impl AppModel {
         menu.append_item(&RelmAction::<QuitAction>::to_menu_item(strings::QUIT_LABEL));
         self.menu_model = menu.clone();
         self.menu_button.set_menu_model(Some(&menu));
-        self.menu_button.set_visible(self.camera.has_camera_menu());
+        self.menu_button.set_visible(true);
     }
 
     /// Sliding-window FPS counter over the last second of rendered frames.
@@ -3199,13 +3218,24 @@ pub(crate) mod tests {
         let a = fake_camera("HD camera", "/dev/video0", Some("p1"));
         let b = fake_camera("HD camera", "/dev/video2", Some("p2"));
         let cams = [a.clone(), b.clone()];
-        let sig = AppModel::camera_menu_signature(&cams);
+        let sig = Some(AppModel::camera_menu_signature(&cams));
         // A frame update does not touch the camera list: no rebuild.
         assert!(!AppModel::menu_needs_rebuild(&sig, &cams));
         // Hotplug or a name collision changes the signature: rebuild.
         let after = [b, fake_camera("Other cam", "/dev/video4", Some("p3"))];
         assert!(AppModel::menu_needs_rebuild(&sig, &after));
         assert!(AppModel::menu_needs_rebuild(&sig, std::slice::from_ref(&a)));
+    }
+
+    /// The menu must exist even with zero cameras (M11 fix): before the
+    /// first build the signature is `None`, which forces a rebuild —
+    /// otherwise an empty camera list would match an empty signature
+    /// and the menu would never appear.
+    #[test]
+    fn menu_builds_even_without_cameras() {
+        assert!(AppModel::menu_needs_rebuild(&None, &[]));
+        let sig = Some(AppModel::camera_menu_signature(&[]));
+        assert!(!AppModel::menu_needs_rebuild(&sig, &[]));
     }
 
     #[test]
