@@ -1,6 +1,6 @@
 # HiView — Arquitetura
 
-> **Versão:** 0.1 · **Data:** 2026-11-10 · **Status:** aprovado para início do M0
+> **Versão:** 1.0 · **Data:** 2026-11-14 · **Status:** HiView 1.0.0 lançado (M0–M11 concluídos)
 > **Engenharia:** Henrique (MundoTela Tecnologia) e Claude · **Implementação:** Devin
 > Documentos irmãos: `MILESTONES.md`, `CONVENTIONS.md`, `USER_MANUAL.md`, `DEVIN_REPORT_TEMPLATE.md`
 
@@ -148,6 +148,7 @@ hiview/
 
 - Enumera o subsistema `video4linux` via crate `udev`. Para cada nó, sobe até o pai `usb_device` e lê `idVendor`/`idProduct`.
 - Filtra os nós com capacidade `V4L2_CAP_VIDEO_CAPTURE` no `device_caps`. Isso descarta o `/dev/video3`, que é de metadados.
+- **Sondagem de formatos pelo `v4l2deviceprovider` explícito** (decisão do M11): `gst::DeviceProviderFactory::by_name("v4l2deviceprovider")`, casando por `device.path`. **Não** use o `gst::DeviceMonitor` com os providers padrão: quando o `gstreamer1.0-pipewire` está instalado (o padrão no Ubuntu GNOME), o `pipewiredeviceprovider` **esconde** o v4l2, e as câmeras chegam sem `device.path`. No teste de instalação limpa, isso deu "0 câmeras" no Ubuntu 24.04. Se o provider v4l2 faltar, o app mostra uma página de erro dedicada, nunca "0 câmeras" em silêncio. A captura continua por `v4l2src`, que coexiste com o PipeWire.
 - **Seleção automática:** prioridade para `05e3:f12a`. Se não houver, a lista mostra todas as câmeras UVC e o usuário escolhe. Uma tabela `KNOWN_MICROSCOPES` em `hiview-core` permite adicionar outros modelos no futuro.
 - **Hotplug:** `udev::MonitorBuilder` no subsistema `video4linux`. Eventos `add`/`remove` viram `CameraEvent::Connected/Disconnected`.
 - O resultado é um `CameraDescriptor { vid, pid, name, dev_node, bus_num, dev_num, usb_path }`. `bus_num`/`dev_num` também são usados pelo helper do botão.
@@ -431,7 +432,11 @@ O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar n
   - `modules-load.d`;
   - cria o grupo `hiview` e adiciona o usuário a ele (o postinst informa que é preciso fazer logout/login).
 - App ID: `br.com.mundotela.HiView`.
-- **Até o M11**, o serviço do botão é instalado por `scripts/install-buttond.sh` (idempotente, com `--uninstall`). O script **não compila**: o usuário roda `cargo build --release -p hiview-buttond` antes, sem sudo, para não deixar arquivos de root em `target/`. O script recusa rodar sem `sudo` ou num shell root direto e instala em `/usr/local/libexec`, `/etc/systemd/system` e `/etc/modules-load.d`.
+- **Pacotes (M11, cargo-deb, lintian sem erros e bloqueante no CI):**
+  - `hiview`: `/usr/bin/hiview`, `.desktop`, ícones (SVG + simbólico), metainfo, man page `hiview(1)`, manual em `/usr/share/doc/hiview/USER_MANUAL.md`.
+  - `hiview-buttond` (opcional): `/usr/libexec/hiview-buttond`, unit em `/usr/lib/systemd/system/` (hardening idêntico ao revisado no M9), `/usr/lib/modules-load.d/hiview.conf` e `/usr/lib/sysusers.d/hiview.conf`. O postinst cria o grupo (`systemd-sysusers`), ativa o serviço e adiciona o `SUDO_USER` ao grupo. O purge remove só o grupo. Os scripts de mantenedor foram revisados linha a linha antes do primeiro `sudo`.
+  - Mantenedor: `MundoTela Tecnologia <portskoll@gmail.com>`.
+- **Instalação a partir do fonte** (alternativa ao `.deb`): o serviço do botão é instalado por `scripts/install-buttond.sh` (idempotente, com `--uninstall`). O script **não compila**: o usuário roda `cargo build --release -p hiview-buttond` antes, sem sudo, para não deixar arquivos de root em `target/`. O script recusa rodar sem `sudo` ou num shell root direto e instala em `/usr/local/libexec`, `/etc/systemd/system` e `/etc/modules-load.d`.
 
 ---
 

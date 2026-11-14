@@ -148,6 +148,8 @@ Use a **versão estável mais recente compatível** com as versões mínimas de 
 - `Drop` de qualquer struct dona de pipeline leva o pipeline a `gst::State::Null`.
 - Gravação: **sempre** EOS → aguardar `Eos` no bus (com timeout) → `Null`. Ver `ARCHITECTURE.md §6.7`.
 - **Nunca** use `/dev/videoN` fixo. O caminho vem sempre de `CameraDescriptor`.
+- **Descoberta de câmeras pelo `v4l2deviceprovider` explícito**, nunca pelo `gst::DeviceMonitor` com os providers padrão: com o `gstreamer1.0-pipewire` instalado (padrão no Ubuntu), o provider do PipeWire esconde o v4l2 e as câmeras chegam sem `device.path` (defeito encontrado no teste de instalação limpa do M11).
+- **Teste em mais de uma distribuição.** O ambiente de desenvolvimento (Pop!_OS) não representa todos os usuários. Mudanças em descoberta, captura ou empacotamento são validadas também num Ubuntu padrão.
 
 ---
 

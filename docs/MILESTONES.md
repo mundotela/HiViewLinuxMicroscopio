@@ -272,6 +272,8 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 
 ## M11 — Empacotamento e acabamento
 
+> **Concluído em 2026-11-14** (merge `a697537`, **HiView 1.0.0**). O critério final foi uma instalação limpa num **Ubuntu 24.04.5 real** (GNOME), seguindo só o manual. A primeira tentativa achou um defeito ("0 câmeras" com o `gstreamer1.0-pipewire`), corrigido e retestado: microscópio, webcam, troca de câmera, hotplug, botão Snap, foto, vídeo com áudio e Galeria funcionaram. A migração do script para o `.deb` foi validada no notebook do Henrique. Relatório em `docs/reports/M11.md`.
+
 **Escopo:**
 
 - `.deb` (`cargo-deb`) para `hiview` e `hiview-buttond`.
@@ -298,8 +300,12 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 - Reportar ao GTK o bug de `translate_coordinates` sem checagem de `native == NULL` (crossing events sobre widgets desparentados; presente no 4.14.5 e no 4.18.6). Evidência em `docs/reports/M5.md`.
 - Galeria: `gio::FileMonitor` para refletir alterações externas nas pastas em tempo real (hoje, a lista é atualizada ao abrir).
 - Galeria: seleção múltipla e arrastar-e-soltar.
+- **Pacote `hiview-buttond` (pendências do M11):**
+  - o postinst deve avisar quando houver uma instalação manual antiga (`/etc/systemd/system/hiview-buttond.service` ou `/usr/local/libexec/hiview-buttond`), que tem prioridade sobre a unit do pacote;
+  - o comentário da unit do pacote ainda diz "Installed by scripts/install-buttond.sh";
+  - `data/hiview-buttond.service` (a versão do script) ainda aponta `Documentation=` para `github.com/portskoll/...` (a do pacote já está corrigida);
+  - página de manual `hiview-buttond(8)`.
 - **Botão físico (pendências do M9):**
-  - corrigir `Documentation=` em `data/hiview-buttond.service` (aponta para `github.com/portskoll/...`; o repositório é `github.com/mundotela/...`);
   - indicador permanente do botão na janela principal (hoje: Preferências + toasts);
   - histerese/validação da duração apertar→soltar contra ajuste de relógio (NTP) no meio de um aperto (probabilidade mínima);
   - validar o caminho evdev quando existir hardware/kernel que gere `KEY_CAMERA`.
