@@ -60,6 +60,10 @@ sudo apt install ./hiview_1.0.0-1_amd64.deb
 Depois, procure **HiView** no menu de aplicativos. O ícone é um
 microscópio verde-água.
 
+> Uma cópia deste manual fica instalada em
+> `/usr/share/doc/hiview/USER_MANUAL.md`, e a página de manual
+> `man hiview` resume as opções de linha de comando.
+
 **Para desinstalar:**
 
 ```bash

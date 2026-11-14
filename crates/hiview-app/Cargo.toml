@@ -113,6 +113,11 @@ assets = [
         "usr/share/doc/hiview/README.md",
         "644",
     ],
+    [
+        "../../docs/USER_MANUAL.md",
+        "usr/share/doc/hiview/USER_MANUAL.md",
+        "644",
+    ],
     # data/hiview.1.gz is `gzip -9n` of data/hiview.1 — regenerate it
     # whenever the man page source changes.
     [

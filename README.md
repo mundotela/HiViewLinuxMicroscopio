@@ -19,7 +19,9 @@ sudo apt install ./hiview-buttond_1.0.0-1_amd64.deb    # opcional: botão Snap
 
 Após instalar o `hiview-buttond`, faça **logout/login** para liberar o
 acesso ao botão. O manual do usuário (`docs/USER_MANUAL.md` §3) detalha
-desinstalação e migração de instalações feitas pelo script.
+desinstalação e migração de instalações feitas pelo script — no sistema
+instalado ele fica em `/usr/share/doc/hiview/USER_MANUAL.md`, com `man
+hiview` para as opções de linha de comando.
 
 ## Gerando os pacotes
 

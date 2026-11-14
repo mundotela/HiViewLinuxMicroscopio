@@ -26,8 +26,10 @@ Seleciona a fonte de captura de vídeo. Valores:
 (reproduz um arquivo em loop).
 .TP
 .B \-\-debug\-overlay
-Mostra a sobreposição de depuração do GTK com FPS e estatísticas de
-renderização.
+Ativa a sobreposição de depuração do GTK
+.RB ( gtk\-debug\-overlay ,
+estatísticas de renderização), o selo de FPS na janela e o contador
+de quadros perdidos durante a gravação.
 .TP
 .B \-\-help
 Mostra a ajuda e sai.
@@ -57,8 +59,8 @@ Soquete do serviço opcional
 .BR hiview\-buttond ,
 que publica os eventos do botão físico Snap.
 .SH VEJA TAMBÉM
-.BR hiview\-buttond (8),
 .BR gst\-launch\-1.0 (1),
 .BR systemd (1)
 .PP
-Manual do usuário completo no pacote-fonte: docs/USER_MANUAL.md.
+Manual do usuário completo:
+.IR /usr/share/doc/hiview/USER_MANUAL.md .
