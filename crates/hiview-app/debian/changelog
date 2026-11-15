@@ -1,3 +1,27 @@
+hiview (1.1.3-1) unstable; urgency=medium
+
+  * Hotfix: elimina o congelamento de ~100% de CPU na thread de UI
+    (janela some). A causa raiz era um laço de realimentação
+    view→sinal→input: um setter observado por #[watch] empurrava um
+    valor defasado do modelo para o ComboRow/SpinRow/Switch, o
+    notify re-enfileirava um Input com o valor oposto e o par
+    ping-pongava para sempre — capturado ao vivo como
+    SetGridColor(0)↔SetGridColor(1) alternando.
+  * Todos os setters que emitem sinal (set_selected, set_active,
+    set_value, set_adjustment) saem de #[watch] e passam a rodar em
+    post_view apenas quando o valor do widget difere do desejado,
+    com o handler de sinal bloqueado durante a escrita.
+  * Mapeamento índice↔perfil do combo de calibração filtrado por
+    dispositivo é agora uma única função canônica (pelo nome do
+    perfil), com teste de ida e volta.
+  * Watchdog de diagnóstico: Inputs de seleção idênticos repetidos
+    mais de 10×/s geram um aviso no log.
+  * Novos testes de contrato: convergência do componente real
+    dirigindo os widgets e proibição de setters com sinal sob
+    #[watch].
+
+ -- MundoTela Tecnologia <portskoll@gmail.com>  Sun, 15 Nov 2026 01:13:01 -0300
+
 hiview (1.1.2-1) unstable; urgency=medium
 
   * Hotfix: tooltips are now set once at widget construction.

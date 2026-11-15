@@ -105,6 +105,34 @@ impl AppConfig {
             .find(|p| p.name == *name && p.device == device)
     }
 
+    /// Index of the active profile inside the device-filtered
+    /// calibration combo — the single source of truth for the
+    /// index↔profile mapping (M13): `0` is "Nenhuma", `n + 1` is the
+    /// nth profile in `profiles_for` order. Identity is the profile
+    /// NAME, never a position in the unfiltered list.
+    #[must_use]
+    pub fn active_profile_index(&self, device: &str) -> u32 {
+        self.active_profile_for(device)
+            .and_then(|active| {
+                self.profiles_for(device)
+                    .position(|p| p.name == active.name)
+            })
+            .map_or(0, |i| (i + 1) as u32)
+    }
+
+    /// Inverse of [`active_profile_index`]: the name of the profile
+    /// combo index `index` selects for `device`. `0`, out-of-range
+    /// values and `INVALID_LIST_POSITION` all mean "Nenhuma" — never
+    /// a profile — so a transient GTK selection can not wipe the
+    /// stored calibration.
+    #[must_use]
+    pub fn profile_name_at(&self, device: &str, index: u32) -> Option<String> {
+        index
+            .checked_sub(1)
+            .and_then(|i| self.profiles_for(device).nth(i as usize))
+            .map(|p| p.name.clone())
+    }
+
     /// Selects the active profile for `device`; `None` measures in
     /// pixels. The name may point at another device's profile — the
     /// resolution above still gates on the device.
@@ -468,6 +496,70 @@ mod tests {
             }
             _ => panic!("expected Loaded"),
         }
+    }
+
+    /// M13: the calibration combo is filtered per device, so its
+    /// index maps through `profiles_for` — NEVER the position in the
+    /// full list. `active_profile_index`/`profile_name_at` are the
+    /// canonical pair: index → name → index must round-trip for every
+    /// valid selection, and foreign-device profiles must not leak in.
+    #[test]
+    fn calibration_index_round_trips_per_device() {
+        let mut config = AppConfig::default();
+        // Interleaved devices: positions in `calibration` differ from
+        // positions in the filtered list — the bug class M13 guards.
+        for (name, device) in [
+            ("A-micro", "05e3:f12a"),
+            ("B-webcam", "0408:403a"),
+            ("C-micro", "05e3:f12a"),
+            ("D-webcam", "0408:403a"),
+        ] {
+            config.calibration.push(crate::measure::CalibrationProfile {
+                name: name.into(),
+                device: device.into(),
+                ..Default::default()
+            });
+        }
+        let micro = "05e3:f12a";
+        let webcam = "0408:403a";
+
+        // No active selection: index 0, "Nenhuma".
+        assert_eq!(config.active_profile_index(micro), 0);
+        assert_eq!(config.profile_name_at(micro, 0), None);
+        // u32::MAX (GTK INVALID_LIST_POSITION) never resolves a name.
+        assert_eq!(config.profile_name_at(micro, u32::MAX), None);
+        assert_eq!(config.profile_name_at(micro, 99), None);
+
+        // Filtered order: micro has A(1) and C(2); webcam B(1) and D(2).
+        config.set_active_profile(micro, Some("C-micro"));
+        assert_eq!(config.active_profile_index(micro), 2);
+        assert_eq!(config.profile_name_at(micro, 2).as_deref(), Some("C-micro"));
+        assert_eq!(config.profile_name_at(micro, 1).as_deref(), Some("A-micro"));
+        // The same filtered position on the other device is its own
+        // profile — no cross-device index bleed.
+        assert_eq!(
+            config.profile_name_at(webcam, 2).as_deref(),
+            Some("D-webcam")
+        );
+
+        // Round-trip for every valid index on both devices.
+        for device in [micro, webcam] {
+            let count = config.profiles_for(device).count() as u32;
+            for index in 0..=count {
+                let name = config.profile_name_at(device, index);
+                config.set_active_profile(device, name.as_deref());
+                assert_eq!(
+                    config.active_profile_index(device),
+                    index,
+                    "index {index} on {device} did not round-trip"
+                );
+            }
+        }
+
+        // A dangling active name resolves to "Nenhuma" — never to a
+        // same-named profile on another device.
+        config.set_active_profile(micro, Some("D-webcam"));
+        assert_eq!(config.active_profile_index(micro), 0);
     }
 
     /// The wizard flow end-to-end at the domain level (§6.9): a

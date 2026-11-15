@@ -228,11 +228,10 @@ pub fn sync(
     let names: Vec<String> = std::iter::once(strings::CALIBRATION_NONE.to_string())
         .chain(config.profiles_for(device).map(|p| p.name.clone()))
         .collect();
-    let profiles: Vec<&hiview_core::CalibrationProfile> = config.profiles_for(device).collect();
-    let active_index = config
-        .active_profile_for(device)
-        .and_then(|active| profiles.iter().position(|p| p.name == active.name))
-        .map_or(0, |i| i + 1) as u32;
+    // The canonical index↔profile mapping (M13) — same function the
+    // `SelectCalibration` handler uses, so both sides agree on which
+    // filtered position a profile NAME occupies.
+    let active_index = config.active_profile_index(device);
     let current: Vec<String> = (0..panel.profile_model.n_items())
         .filter_map(|i| panel.profile_model.string(i).map(|s| s.to_string()))
         .collect();

@@ -337,6 +337,74 @@ pub enum Input {
     SetButtonLongPress(f64),
 }
 
+impl Input {
+    /// Key for the feedback-loop watchdog (M13) — `Some` only for
+    /// inputs a GTK widget can emit from a `notify`/`toggled`/
+    /// `value-changed` handler, i.e. the ones a programmatic setter
+    /// could bounce back into the channel.
+    fn selection_key(&self) -> Option<String> {
+        match self {
+            Input::SetGridEnabled(_)
+            | Input::SetGridSpacing(_)
+            | Input::SetGridColor(_)
+            | Input::SetGridOpacity(_)
+            | Input::SetCrosshairEnabled(_)
+            | Input::SetCrosshairStyle(_)
+            | Input::SetCrosshairColor(_)
+            | Input::SetAdjust(..)
+            | Input::ArmMeasureIndex(_)
+            | Input::SelectCalibration(_)
+            | Input::ModeToggled
+            | Input::ShutterModeToggled => Some(format!("{self:?}")),
+            _ => None,
+        }
+    }
+}
+
+/// M13 watchdog: identical selection inputs arriving at loop speed
+/// mean a view→notify→input feedback cycle slipped through — warn
+/// once per one-second window instead of burning the UI thread
+/// silently.
+struct InputLoopGuard {
+    window: Instant,
+    counts: std::collections::HashMap<String, u32>,
+    warned: bool,
+}
+
+impl InputLoopGuard {
+    /// More identical inputs than this in one second is unphysical —
+    /// no user clicks that fast.
+    const MAX_PER_SECOND: u32 = 10;
+
+    fn new() -> Self {
+        Self {
+            window: Instant::now(),
+            counts: std::collections::HashMap::new(),
+            warned: false,
+        }
+    }
+
+    fn note(&mut self, input: &Input) {
+        let Some(key) = input.selection_key() else {
+            return;
+        };
+        if self.window.elapsed() > Duration::from_secs(1) {
+            self.counts.clear();
+            self.window = Instant::now();
+            self.warned = false;
+        }
+        let count = self.counts.entry(key.clone()).or_insert(0);
+        *count += 1;
+        if *count > Self::MAX_PER_SECOND && !self.warned {
+            self.warned = true;
+            tracing::warn!(
+                "selection input {key} arrived {}× in one second — possible view/input feedback loop",
+                *count
+            );
+        }
+    }
+}
+
 /// Root component of the application.
 pub struct AppModel {
     camera: CameraService,
@@ -443,8 +511,10 @@ pub struct AppModel {
     /// Coalescing flag for slider drags: one pipeline apply per 80 ms.
     adjust_pending: Rc<Cell<bool>>,
     /// Every slider showing an adjustment — the Bancada panel rows plus
-    /// the Explorar popover twins — kept for value sync.
-    adjust_sliders: Vec<(AdjustKind, gtk::Scale)>,
+    /// the Explorar popover twins — kept for value sync together with
+    /// the `value-changed` handler `sync_scales` blocks while pushing
+    /// model values (M13).
+    adjust_sliders: Vec<(AdjustKind, gtk::Scale, glib::SignalHandlerId)>,
     /// Containers disabled while no source streams (the Bancada group
     /// and the popover content): adjustments are meaningless without a
     /// device to persist them under.
@@ -467,9 +537,6 @@ pub struct AppModel {
     /// The preferences page hosting the sidebar groups — the Medição
     /// group is added imperatively like the adjust rows.
     bench_prefs: adw::PreferencesPage,
-    /// Grid spacing row: its unit (px/mm), digits and range follow the
-    /// active calibration, so it is reconfigured imperatively.
-    grid_spacing_row: adw::SpinRow,
     /// Snap-button edge interpreter: debounce + short/long split
     /// (§6.10). The long threshold mirrors `config.button`.
     button_tracker: ButtonTracker,
@@ -489,6 +556,123 @@ pub struct AppModel {
     noise_capture: Option<NoiseCapture>,
     /// `got / total` fraction shown by the progress overlay.
     noise_progress: f64,
+    /// M13 watchdog — counts identical selection inputs per second
+    /// and warns once per window when a view↔input feedback loop
+    /// appears (the v1.1.2 freeze signature).
+    loop_guard: InputLoopGuard,
+}
+
+/// Programmatic `selected` write with its notify handler blocked —
+/// the emission must never feed back as an `Input` (M13). The
+/// current-vs-desired compare makes it a no-op when already in sync.
+fn sync_selected(row: &adw::ComboRow, handler: &glib::SignalHandlerId, want: u32) {
+    if row.selected() != want {
+        row.block_signal(handler);
+        row.set_selected(want);
+        row.unblock_signal(handler);
+    }
+}
+
+/// Same contract as [`sync_selected`] for `adw::SwitchRow::active`.
+fn sync_active(row: &adw::SwitchRow, handler: &glib::SignalHandlerId, want: bool) {
+    if row.is_active() != want {
+        row.block_signal(handler);
+        row.set_active(want);
+        row.unblock_signal(handler);
+    }
+}
+
+/// Compare-then-set for `gtk::LevelBar::value` — no handler listens,
+/// so nothing to block; the guard only skips redundant writes.
+fn sync_level(bar: &gtk::LevelBar, want: f64) {
+    if (bar.value() - want).abs() > f64::EPSILON {
+        bar.set_value(want);
+    }
+}
+
+/// Same compare-then-set contract for toggles whose handler listens
+/// to `clicked` (never fires programmatically) — no signal to block,
+/// the guard only skips redundant writes.
+fn sync_toggle(btn: &gtk::ToggleButton, want: bool) {
+    if btn.is_active() != want {
+        btn.set_active(want);
+    }
+}
+
+/// Same contract as [`sync_selected`] for `adw::SpinRow::value`.
+fn sync_value(row: &adw::SpinRow, handler: &glib::SignalHandlerId, want: f64) {
+    if (row.value() - want).abs() > f64::EPSILON {
+        row.block_signal(handler);
+        row.set_value(want);
+        row.unblock_signal(handler);
+    }
+}
+
+/// Reconfigures the grid spacing row's range/digits for its current
+/// unit — an `adw::SpinRow` can't express that through a declarative
+/// property. Called from `post_view`; only re-fires when the
+/// adjustment's signature actually differs (init defaults and unit
+/// flips alike), with the `value_notify` handler blocked: swapping
+/// the adjustment re-emits `notify::value` even when the value
+/// survives the range change (M13).
+fn sync_grid_unit(model: &AppModel, row: &adw::SpinRow, handler: &glib::SignalHandlerId) {
+    let (lo, hi, step, digits) = if model.grid_spacing_is_mm() {
+        (
+            hiview_core::MIN_GRID_SPACING_MM,
+            hiview_core::MAX_GRID_SPACING_MM,
+            0.1,
+            2,
+        )
+    } else {
+        (
+            hiview_core::MIN_GRID_SPACING_PX,
+            hiview_core::MAX_GRID_SPACING_PX,
+            5.0,
+            0,
+        )
+    };
+    let adj = row.adjustment();
+    if row.digits() == digits
+        && adj.lower() == lo
+        && adj.upper() == hi
+        && adj.step_increment() == step
+    {
+        return;
+    }
+    row.block_signal(handler);
+    row.set_adjustment(Some(&gtk::Adjustment::new(
+        model.grid_spacing_display(),
+        lo,
+        hi,
+        step,
+        step * 5.0,
+        0.0,
+    )));
+    row.set_digits(digits);
+    row.unblock_signal(handler);
+}
+
+/// Pushes `mode` into the linked Explorar/Bancada toggles. Both
+/// handlers are blocked for the whole write: activating one button
+/// deactivates the other, and the unblocked half would emit a
+/// `ModeToggled` reading the mid-transition state.
+fn sync_mode_buttons(
+    explore: &gtk::ToggleButton,
+    explore_handler: &glib::SignalHandlerId,
+    bench: &gtk::ToggleButton,
+    bench_handler: &glib::SignalHandlerId,
+    mode: AppMode,
+) {
+    let explore_on = mode == AppMode::Explore;
+    if explore.is_active() == explore_on && bench.is_active() != explore_on {
+        return;
+    }
+    explore.block_signal(explore_handler);
+    bench.block_signal(bench_handler);
+    explore.set_active(explore_on);
+    bench.set_active(!explore_on);
+    bench.unblock_signal(bench_handler);
+    explore.unblock_signal(explore_handler);
 }
 
 #[relm4::component(pub)]
@@ -526,9 +710,9 @@ impl SimpleComponent for AppModel {
                                         set_label: strings::MODE_EXPLORE_LABEL,
                                         set_tooltip_text: Some(strings::MODE_TOGGLE_TOOLTIP),
                                         set_focusable: false,
-                                        #[watch]
                                         set_active: model.mode == AppMode::Explore,
-                                        connect_toggled => Input::ModeToggled,
+                                        connect_toggled => Input::ModeToggled
+                                            @mode_explore_handler,
                                     },
                                     #[name = "mode_bench_btn"]
                                     gtk::ToggleButton {
@@ -536,9 +720,9 @@ impl SimpleComponent for AppModel {
                                         set_tooltip_text: Some(strings::MODE_TOGGLE_TOOLTIP),
                                         set_focusable: false,
                                         set_group: Some(&mode_explore_btn),
-                                        #[watch]
                                         set_active: model.mode == AppMode::Bench,
-                                        connect_toggled => Input::ModeToggled,
+                                        connect_toggled => Input::ModeToggled
+                                            @mode_bench_handler,
                                     },
                                 },
 
@@ -587,13 +771,17 @@ impl SimpleComponent for AppModel {
                                         add = &adw::PreferencesGroup {
                                             set_title: strings::GRID_GROUP_TITLE,
 
+                                            #[name = "grid_row"]
                                             adw::SwitchRow {
                                                 set_title: strings::GRID_SHOW_LABEL,
-                                                #[watch]
+                                                // Initial value only —
+                                                // `post_view` re-syncs
+                                                // with the handler
+                                                // blocked (M13).
                                                 set_active: model.config.overlays.grid.enabled,
                                                 connect_active_notify[sender] => move |row| {
                                                     sender.input(Input::SetGridEnabled(row.is_active()));
-                                                },
+                                                } @grid_row_handler,
                                             },
 
                                             #[name = "grid_spacing"]
@@ -606,22 +794,20 @@ impl SimpleComponent for AppModel {
                                                 // reconfigures the row.
                                                 #[watch]
                                                 set_title: model.grid_spacing_label(),
-                                                #[watch]
                                                 set_value: model.grid_spacing_display(),
                                                 connect_value_notify[sender] => move |row| {
                                                     sender.input(Input::SetGridSpacing(row.value()));
-                                                },
+                                                } @grid_spacing_handler,
                                             },
 
                                             #[name = "grid_color_row"]
                                             adw::ComboRow {
                                                 set_title: strings::GRID_COLOR_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::COLOR_NAMES)),
-                                                #[watch]
                                                 set_selected: model.config.overlays.grid.color.preset_index(),
                                                 connect_selected_notify[sender] => move |row| {
                                                     sender.input(Input::SetGridColor(row.selected()));
-                                                },
+                                                } @grid_color_handler,
                                             },
 
                                             #[name = "grid_opacity_row"]
@@ -632,46 +818,43 @@ impl SimpleComponent for AppModel {
                                                     10.0, 100.0, 5.0, 10.0, 0.0,
                                                 )),
                                                 set_digits: 0,
-                                                #[watch]
                                                 set_value: model.config.overlays.grid.opacity * 100.0,
                                                 connect_value_notify[sender] => move |row| {
                                                     sender.input(Input::SetGridOpacity(row.value() / 100.0));
-                                                },
+                                                } @grid_opacity_handler,
                                             },
                                         },
 
                                         add = &adw::PreferencesGroup {
                                             set_title: strings::CROSS_GROUP_TITLE,
 
+                                            #[name = "cross_row"]
                                             adw::SwitchRow {
                                                 set_title: strings::CROSS_SHOW_LABEL,
-                                                #[watch]
                                                 set_active: model.config.overlays.crosshair.enabled,
                                                 connect_active_notify[sender] => move |row| {
                                                     sender.input(Input::SetCrosshairEnabled(row.is_active()));
-                                                },
+                                                } @cross_row_handler,
                                             },
 
                                             #[name = "cross_style_row"]
                                             adw::ComboRow {
                                                 set_title: strings::CROSS_STYLE_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::STYLE_NAMES)),
-                                                #[watch]
                                                 set_selected: model.config.overlays.crosshair.style as u32,
                                                 connect_selected_notify[sender] => move |row| {
                                                     sender.input(Input::SetCrosshairStyle(row.selected()));
-                                                },
+                                                } @cross_style_handler,
                                             },
 
                                             #[name = "cross_color_row"]
                                             adw::ComboRow {
                                                 set_title: strings::CROSS_COLOR_LABEL,
                                                 set_model: Some(&gtk::StringList::new(&strings::COLOR_NAMES)),
-                                                #[watch]
                                                 set_selected: model.config.overlays.crosshair.color.preset_index(),
                                                 connect_selected_notify[sender] => move |row| {
                                                     sender.input(Input::SetCrosshairColor(row.selected()));
-                                                },
+                                                } @cross_color_handler,
                                             },
                                         },
 
@@ -787,10 +970,10 @@ impl SimpleComponent for AppModel {
                                 #[watch]
                                 set_visible: model.recording_has_audio(),
                             },
+                            #[name = "mic_level_bar"]
                             gtk::LevelBar {
                                 #[watch]
                                 set_visible: model.recording_has_audio(),
-                                #[watch]
                                 set_value: model.mic_level as f64,
                                 set_width_request: 48,
                                 set_valign: gtk::Align::Center,
@@ -896,13 +1079,13 @@ impl SimpleComponent for AppModel {
                             // "Gravar áudio" preference; a track cannot
                             // be added mid-file, so it is disabled
                             // while a recording is active.
+                            #[name = "mic_toggle_btn"]
                             gtk::ToggleButton {
                                 #[watch]
                                 set_icon_name: model.mic_icon(),
                                 set_tooltip_text: Some(strings::MIC_TOGGLE_TOOLTIP),
                                 set_has_frame: false,
                                 set_focusable: false,
-                                #[watch]
                                 set_active: model.config.video.record_audio,
                                 #[watch]
                                 set_sensitive: model.recording.is_none(),
@@ -932,6 +1115,7 @@ impl SimpleComponent for AppModel {
                             gtk::Separator {
                                 set_orientation: gtk::Orientation::Vertical,
                             },
+                            #[name = "freeze_btn"]
                             gtk::ToggleButton {
                                 set_icon_name: "weather-snow-symbolic",
                                 set_tooltip_text: Some(strings::FREEZE_TOOLTIP),
@@ -940,7 +1124,6 @@ impl SimpleComponent for AppModel {
                                 connect_clicked => Input::ToggleFreeze,
                                 #[watch]
                                 set_sensitive: model.recording.is_none(),
-                                #[watch]
                                 set_active: model.frozen,
                             },
                             // Explorar-only: a small popover with just
@@ -987,6 +1170,68 @@ impl SimpleComponent for AppModel {
                 },
             },
         }
+    }
+
+    /// Runs after every `update_view` with all named widgets and the
+    /// model in scope. v1.1.3 (M13): every setter that can emit a
+    /// signal lives HERE — called only when the widget's current
+    /// value differs from the desired one, with its notify/toggled
+    /// handler signal-blocked. A watched setter echoing a stale model
+    /// value into the widget re-emitted `notify` → `Input` → `update`
+    /// → `update_view` with the opposite value — a two-message
+    /// ping-pong that pinned the UI thread at ~100%.
+    fn post_view() {
+        sync_selected(
+            grid_color_row,
+            grid_color_handler,
+            model.config.overlays.grid.color.preset_index(),
+        );
+        // Range/digits first — the unit follows the calibration.
+        sync_grid_unit(model, grid_spacing, grid_spacing_handler);
+        sync_value(
+            grid_spacing,
+            grid_spacing_handler,
+            model.grid_spacing_display(),
+        );
+        sync_value(
+            grid_opacity_row,
+            grid_opacity_handler,
+            model.config.overlays.grid.opacity * 100.0,
+        );
+        sync_active(
+            grid_row,
+            grid_row_handler,
+            model.config.overlays.grid.enabled,
+        );
+        sync_selected(
+            cross_style_row,
+            cross_style_handler,
+            model.config.overlays.crosshair.style as u32,
+        );
+        sync_selected(
+            cross_color_row,
+            cross_color_handler,
+            model.config.overlays.crosshair.color.preset_index(),
+        );
+        sync_active(
+            cross_row,
+            cross_row_handler,
+            model.config.overlays.crosshair.enabled,
+        );
+        // Linked toggles: activating one deactivates the other, so
+        // BOTH handlers stay blocked for the whole pair-write.
+        sync_mode_buttons(
+            mode_explore_btn,
+            mode_explore_handler,
+            mode_bench_btn,
+            mode_bench_handler,
+            model.mode,
+        );
+        // Clicked-only toggles: nothing to block, but the same
+        // compare-before-set rule applies.
+        sync_toggle(mic_toggle_btn, model.config.video.record_audio);
+        sync_toggle(freeze_btn, model.frozen);
+        sync_level(mic_level_bar, model.mic_level as f64);
     }
 
     fn init(
@@ -1101,13 +1346,14 @@ impl SimpleComponent for AppModel {
             measure_panel: None,
             measure_sink: Rc::new(|_| {}),
             bench_prefs: adw::PreferencesPage::new(),
-            grid_spacing_row: adw::SpinRow::with_range(0.0, 1.0, 1.0),
+
             button_tracker: ButtonTracker::new(50, button_long_press),
             button_started: false,
             button_status: None,
             pref_button_status: None,
             noise_capture: None,
             noise_progress: 0.0,
+            loop_guard: InputLoopGuard::new(),
         };
         model.sync_menu();
 
@@ -1144,7 +1390,6 @@ impl SimpleComponent for AppModel {
             let sender = sender.clone();
             move |g| sender.input(Input::Measure(g))
         });
-        model.sync_grid_unit();
         model.sync_measure_ui();
         model.nav_view = widgets.nav_view.clone();
         model.nav_view.connect_popped({
@@ -1277,6 +1522,9 @@ impl SimpleComponent for AppModel {
     }
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
+        #[cfg(test)]
+        tests::note_update(&message);
+        self.loop_guard.note(&message);
         match message {
             Input::Camera(event) => {
                 let microscope_arrived =
@@ -1693,24 +1941,20 @@ impl SimpleComponent for AppModel {
             }
             Input::SelectCalibration(index) => {
                 // The combo lists only the ACTIVE DEVICE's profiles
-                // (M12) — the index maps into `profiles_for`.
+                // (M12) — `profile_name_at` is the canonical mapping
+                // into `profiles_for` (M13): index 0, out-of-range
+                // values and `INVALID_LIST_POSITION` (u32::MAX, which
+                // GTK notifies while the combo's model splices) all
+                // resolve to `None`/"Nenhuma" — a transient selection
+                // can never wipe the stored profile.
                 let Some(device) = self.camera.device_key() else {
                     return;
                 };
-                // Ignore out-of-range selections — GTK can notify with
-                // `INVALID_LIST_POSITION` (u32::MAX) while the combo's
-                // model splices; treating it as "Nenhuma" would wipe
-                // the active profile (M8 round-2 finding).
-                if index as usize > self.config.profiles_for(&device).count() {
+                if index > self.config.profiles_for(&device).count() as u32 {
                     return;
                 }
                 let old_ppm = self.active_px_per_mm();
-                let name = index.checked_sub(1).and_then(|i| {
-                    self.config
-                        .profiles_for(&device)
-                        .nth(i as usize)
-                        .map(|p| p.name.clone())
-                });
+                let name = self.config.profile_name_at(&device, index);
                 if self
                     .config
                     .active_calibrations
@@ -1843,7 +2087,6 @@ impl AppModel {
         self.split_view = widgets.split_view.clone();
         self.bench_sidebar = widgets.bench_sidebar.clone();
         self.bench_prefs = widgets.bench_prefs.clone();
-        self.grid_spacing_row = widgets.grid_spacing.clone();
         // Push the persisted overlay/mode state into the viewport — the
         // placeholder overlays stay `None` (hidden) until this runs.
         self.apply_overlays();
@@ -1917,7 +2160,6 @@ impl AppModel {
             self.state_ppm = new_ppm;
             self.calibration_changed(old_ppm);
         }
-        self.sync_grid_unit();
         if self.state != CameraState::Streaming {
             self.viewport.reset();
             self.set_frozen(false);
@@ -2095,7 +2337,6 @@ impl AppModel {
             .rekeyed(old_ppm, new_ppm);
         self.persist_config();
         self.apply_overlays();
-        self.sync_grid_unit();
         self.sync_measure_ui();
     }
 
@@ -2150,38 +2391,6 @@ impl AppModel {
             GridSpacing::Pixels(px) => px,
             GridSpacing::Millimeters(mm) => mm,
         }
-    }
-
-    /// Reconfigures the grid spacing row for its current unit — the
-    /// adjustment's range and digits can't come from a `#[watch]`.
-    fn sync_grid_unit(&self) {
-        let (value, lo, hi, step, digits) = if self.grid_spacing_is_mm() {
-            (
-                self.grid_spacing_display(),
-                hiview_core::MIN_GRID_SPACING_MM,
-                hiview_core::MAX_GRID_SPACING_MM,
-                0.1,
-                2,
-            )
-        } else {
-            (
-                self.grid_spacing_display(),
-                hiview_core::MIN_GRID_SPACING_PX,
-                hiview_core::MAX_GRID_SPACING_PX,
-                5.0,
-                0,
-            )
-        };
-        self.grid_spacing_row
-            .set_adjustment(Some(&gtk::Adjustment::new(
-                value,
-                lo,
-                hi,
-                step,
-                step * 5.0,
-                0.0,
-            )));
-        self.grid_spacing_row.set_digits(digits);
     }
 
     /// PNG `tEXt` provenance for the next photo (§6.6, M8): app
@@ -2955,7 +3164,10 @@ impl AppModel {
     /// One label + `gtk::Scale` row wired to `Input::SetAdjust`. The
     /// returned scale is stored for value sync — Bancada rows and the
     /// Explorar popover twins share the same model value (§6.11).
-    fn adjust_row(kind: AdjustKind, sink: &Rc<dyn Fn(Input)>) -> (gtk::Widget, gtk::Scale) {
+    fn adjust_row(
+        kind: AdjustKind,
+        sink: &Rc<dyn Fn(Input)>,
+    ) -> (gtk::Widget, gtk::Scale, glib::SignalHandlerId) {
         let (min, max) = range_of(kind);
         let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, min, max, step_of(kind));
         // The wheel must scroll the panel, never the value (§13 rule).
@@ -2968,7 +3180,7 @@ impl AppModel {
             scale.set_format_value_func(|_, v| format!("{v:.0}%"));
         }
         scale.set_hexpand(true);
-        scale.connect_value_changed({
+        let handler = scale.connect_value_changed({
             let sink = sink.clone();
             move |scale| sink(Input::SetAdjust(kind, scale.value()))
         });
@@ -2986,7 +3198,7 @@ impl AppModel {
             .build();
         row.append(&label);
         row.append(&scale);
-        (row.upcast(), scale)
+        (row.upcast(), scale, handler)
     }
 
     /// Fills the Bancada "Imagem" group (five sliders + "Restaurar
@@ -3003,9 +3215,9 @@ impl AppModel {
             Rc::new(move |input| sender.input(input))
         };
         for kind in ImageAdjust::KINDS {
-            let (row, scale) = Self::adjust_row(kind, &sink);
+            let (row, scale, handler) = Self::adjust_row(kind, &sink);
             widgets.adjust_group.add(&row);
-            self.adjust_sliders.push((kind, scale));
+            self.adjust_sliders.push((kind, scale, handler));
         }
         let reset = adw::ActionRow::builder()
             .title(strings::ADJUST_RESET_LABEL)
@@ -3039,12 +3251,12 @@ impl AppModel {
     fn build_popover_rows(
         pop_box: &gtk::Box,
         sink: &Rc<dyn Fn(Input)>,
-        scales: &mut Vec<(AdjustKind, gtk::Scale)>,
+        scales: &mut Vec<(AdjustKind, gtk::Scale, glib::SignalHandlerId)>,
     ) {
         for kind in Self::EXPLORE_ADJUST_KINDS {
-            let (row, scale) = Self::adjust_row(kind, sink);
+            let (row, scale, handler) = Self::adjust_row(kind, sink);
             pop_box.append(&row);
-            scales.push((kind, scale));
+            scales.push((kind, scale, handler));
         }
     }
 
@@ -3073,13 +3285,18 @@ impl AppModel {
 
     /// Every slider mirrors `self.adjust` — covers the Bancada/Explorar
     /// twins, "Restaurar padrões" and stored-value re-application.
-    /// (`set_value` on the twin re-emits one `SetAdjust` that converges
-    /// on the same value.)
-    fn sync_scales(adjust: &ImageAdjust, scales: &[(AdjustKind, gtk::Scale)]) {
-        for (kind, scale) in scales {
+    /// The `value-changed` handler is blocked while pushing (M13): a
+    /// programmatic `set_value` must never feed back a `SetAdjust`.
+    fn sync_scales(
+        adjust: &ImageAdjust,
+        scales: &[(AdjustKind, gtk::Scale, glib::SignalHandlerId)],
+    ) {
+        for (kind, scale, handler) in scales {
             let value = adjust.get(*kind);
             if (scale.value() - value).abs() > f64::EPSILON {
+                scale.block_signal(handler);
                 scale.set_value(value);
+                scale.unblock_signal(handler);
             }
         }
     }
@@ -3387,8 +3604,162 @@ fn dump_widget_tree(widget: &(impl IsA<gtk::Widget> + gtk::prelude::BuildableExt
 #[cfg(test)]
 pub(crate) mod tests {
     use std::path::PathBuf;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+
+    /// One entry per `update` call — the convergence test reads the
+    /// recent input sequence to find which input feeds back.
+    static UPDATE_LOG: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static UPDATE_COUNT: AtomicU64 = AtomicU64::new(0);
+
+    pub(crate) fn note_update(input: &Input) {
+        UPDATE_COUNT.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut log) = UPDATE_LOG.lock() {
+            log.push(format!("{input:?}"));
+            let len = log.len();
+            if len > 64 {
+                log.drain(0..len - 64);
+            }
+        }
+    }
+
+    fn update_count() -> u64 {
+        UPDATE_COUNT.load(Ordering::Relaxed)
+    }
+
+    /// Pumps the default main context until it is idle. Bails out if
+    /// the context never drains — that IS the feedback-loop symptom,
+    /// so we dump the recent inputs instead of hanging forever.
+    fn pump(iterations: usize) {
+        let ctx = gtk::glib::MainContext::default();
+        for _ in 0..iterations {
+            let mut dispatched = 0;
+            while ctx.iteration(false) {
+                dispatched += 1;
+                if dispatched > 60 {
+                    panic!(
+                        "main context never drained — feedback loop: {:?}",
+                        UPDATE_LOG
+                    );
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Pumps and returns the update count delta after a settle window.
+    fn settle_and_count() -> (u64, u64) {
+        let before = update_count();
+        pump(10);
+        let after_1 = update_count();
+        std::thread::sleep(Duration::from_millis(200));
+        pump(10);
+        (update_count() - before, update_count() - after_1)
+    }
+
+    /// Full-component convergence check (v1.1.3): the REAL AppModel
+    /// runs against the synthetic test source — every selection-style
+    /// input must settle after at most one extra update round. A
+    /// watch→notify→input feedback loop shows up as the update count
+    /// growing without bound.
+    ///
+    /// NOT a `#[test]`: GTK can only init on one thread, so this runs
+    /// inside the single `crate::tests::gtk_ui_contracts`. Needs
+    /// `XDG_CONFIG_HOME` pointed at a scratch dir (config.toml is
+    /// written by the live component).
+    pub(crate) fn check_update_convergence() {
+        let _ = hiview_capture::init();
+        let component = AppModel::builder().launch(crate::cli::Args {
+            source: crate::cli::Source::Test,
+            debug_overlay: false,
+        });
+        component.widget().present();
+        let sender = component.sender().clone();
+        // Let the initial burst (init, first frames) settle.
+        pump(40);
+        let baseline = update_count();
+        std::thread::sleep(Duration::from_millis(300));
+        pump(10);
+        let per_sec = (update_count() - baseline) as f64 / 0.35;
+        eprintln!("baseline update rate: {per_sec:.0}/s");
+        assert!(
+            per_sec < 120.0,
+            "update loop already spinning at {per_sec:.0}/s: {:?}",
+            UPDATE_LOG
+        );
+
+        for input in [
+            Input::SetGridColor(3),
+            Input::SetCrosshairColor(2),
+            Input::SetCrosshairStyle(1),
+            Input::SetGridEnabled(true),
+            Input::SetCrosshairEnabled(true),
+            Input::SetGridSpacing(30.0),
+            Input::SetGridOpacity(0.5),
+            Input::ToggleMode,
+            Input::ToggleMode,
+        ] {
+            sender.emit(input);
+            let (total, tail) = settle_and_count();
+            eprintln!("input: {total} updates, tail window {tail}");
+            assert!(
+                tail < 40,
+                "did not converge — {tail} updates in the tail window; recent inputs: {:?}",
+                UPDATE_LOG
+            );
+        }
+
+        // Widget-driven pass: drive the real rows like a user
+        // clicking/choosing — the full notify→input→update_view path.
+        for i in 0..5u32 {
+            component.widgets().grid_color_row.set_selected(i);
+            let (total, tail) = settle_and_count();
+            eprintln!("grid color set_selected({i}): {total} updates, tail {tail}");
+            assert!(tail < 40, "grid color loop: {:?}", UPDATE_LOG);
+        }
+        for v in [20.0_f64, 60.0, 5.0, 40.0] {
+            component.widgets().grid_spacing.set_value(v);
+            let (total, tail) = settle_and_count();
+            eprintln!("grid spacing set_value({v}): {total} updates, tail {tail}");
+            assert!(tail < 40, "grid spacing loop: {:?}", UPDATE_LOG);
+        }
+        for v in [80.0_f64, 50.0, 100.0] {
+            component.widgets().grid_opacity_row.set_value(v);
+            let (total, tail) = settle_and_count();
+            eprintln!("grid opacity set_value({v}): {total} updates, tail {tail}");
+            assert!(tail < 40, "grid opacity loop: {:?}", UPDATE_LOG);
+        }
+        for i in 0..3u32 {
+            component.widgets().cross_style_row.set_selected(i);
+            let (total, tail) = settle_and_count();
+            eprintln!("cross style set_selected({i}): {total} updates, tail {tail}");
+            assert!(tail < 40, "cross style loop: {:?}", UPDATE_LOG);
+        }
+        for i in 0..5u32 {
+            component.widgets().cross_color_row.set_selected(i);
+            let (total, tail) = settle_and_count();
+            eprintln!("cross color set_selected({i}): {total} updates, tail {tail}");
+            assert!(tail < 40, "cross color loop: {:?}", UPDATE_LOG);
+        }
+        for on in [true, false, true] {
+            component.widgets().grid_row.set_active(on);
+            let (total, tail) = settle_and_count();
+            eprintln!("grid row set_active({on}): {total} updates, tail {tail}");
+            assert!(tail < 40, "grid switch loop: {:?}", UPDATE_LOG);
+            component.widgets().cross_row.set_active(on);
+            let (total, tail) = settle_and_count();
+            eprintln!("cross row set_active({on}): {total} updates, tail {tail}");
+            assert!(tail < 40, "cross switch loop: {:?}", UPDATE_LOG);
+        }
+        for on in [true, false, true, false] {
+            component.widgets().mode_bench_btn.set_active(on);
+            let (total, tail) = settle_and_count();
+            eprintln!("mode bench set_active({on}): {total} updates, tail {tail}");
+            assert!(tail < 40, "mode toggle loop: {:?}", UPDATE_LOG);
+        }
+    }
 
     fn fake_camera(name: &str, node: &str, usb_path: Option<&str>) -> CameraDescriptor {
         CameraDescriptor {
@@ -3534,6 +3905,42 @@ pub(crate) mod tests {
         );
     }
 
+    /// Source contract (v1.1.3 / M13): a signal-emitting widget setter
+    /// — `set_selected`, `set_active`, `set_value`, `set_adjustment` —
+    /// must never sit behind `#[watch]`/`#[track]`. The notify/toggled
+    /// handler it fires re-queues an `Input`, and a stale model value
+    /// pushed into the widget made the pair ping-pong forever (the
+    /// ~100 % CPU freeze). These setters live in `post_view`, behind
+    /// a current-vs-desired compare with the handler signal-blocked.
+    #[test]
+    fn no_watched_signal_setters() {
+        const SIGNAL_SETTERS: [&str; 4] =
+            ["set_selected", "set_active", "set_value", "set_adjustment"];
+        for src in [include_str!("app.rs"), include_str!("measure_ui.rs")] {
+            let mut watched = false;
+            for line in src.lines() {
+                let t = line.trim();
+                if t.starts_with("#[watch]") || t.starts_with("#[track") {
+                    watched = true;
+                    continue;
+                }
+                for setter in SIGNAL_SETTERS {
+                    assert!(
+                        !(watched && t.starts_with(setter)),
+                        "`{t}` follows a #[watch]/#[track] — \
+                         signal-emitting setters belong in post_view \
+                         behind a compare + signal-blocked write"
+                    );
+                }
+                // A blank/comment line keeps the attr context; any
+                // other property breaks it.
+                if !t.is_empty() && !t.starts_with("//") && !t.starts_with('#') {
+                    watched = false;
+                }
+            }
+        }
+    }
+
     pub(crate) fn check() {
         let emitted = Rc::new(std::cell::RefCell::new(Vec::<(AdjustKind, f64)>::new()));
         let sink: Rc<dyn Fn(Input)> = {
@@ -3562,7 +3969,7 @@ pub(crate) mod tests {
             rows.push(c);
         }
         assert_eq!(rows.len(), 2);
-        for ((kind, scale), row) in pop_scales.iter().zip(&rows) {
+        for ((kind, scale, _handler), row) in pop_scales.iter().zip(&rows) {
             let Some(row) = row.downcast_ref::<gtk::Box>() else {
                 panic!("row is a Box")
             };
@@ -3586,12 +3993,14 @@ pub(crate) mod tests {
 
         // Shared state — model -> twins: a Bancada twin built by the
         // same factory and the popover twin must move together.
-        let (_, bench_scale) = AppModel::adjust_row(AdjustKind::Brightness, &sink);
-        let mut all_scales = vec![(AdjustKind::Brightness, bench_scale.clone())];
-        all_scales.extend(pop_scales.iter().cloned());
+        let (_, bench_scale, bench_handler) = AppModel::adjust_row(AdjustKind::Brightness, &sink);
         let mut adjust = ImageAdjust::default();
         adjust.set(AdjustKind::Brightness, 0.42);
-        AppModel::sync_scales(&adjust, &all_scales);
+        AppModel::sync_scales(
+            &adjust,
+            &[(AdjustKind::Brightness, bench_scale.clone(), bench_handler)],
+        );
+        AppModel::sync_scales(&adjust, &pop_scales);
         assert!((bench_scale.value() - 0.42).abs() < 1e-9);
         assert!((pop_scales[0].1.value() - 0.42).abs() < 1e-9);
 
