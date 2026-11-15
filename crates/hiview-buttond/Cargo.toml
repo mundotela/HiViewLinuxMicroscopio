@@ -27,13 +27,13 @@ tempfile.workspace = true
 # ./debian/ — they run as ROOT and are reviewed per CONVENTIONS §11.1.
 [package.metadata.deb]
 name = "hiview-buttond"
-maintainer = "MundoTela Tecnologia <portskoll@gmail.com>"
+maintainer = "MundoTela Tecnologia <contato@mundotela.com.br>"
 # DEP-5 copyright — points at common-licenses instead of embedding
 # the full GPL text (lintian).
 copyright = '''
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: hiview-buttond
-Upstream-Contact: MundoTela Tecnologia <portskoll@gmail.com>
+Upstream-Contact: MundoTela Tecnologia <contato@mundotela.com.br>
 Source: https://github.com/mundotela/HiViewLinuxMicroscopio
 
 Files: *
@@ -64,6 +64,11 @@ changelog = "debian/changelog"
 # generated postinst fragment (systemd-units below).
 depends = "$auto"
 maintainer-scripts = "debian/"
+# The workspace release profile keeps line tables for HiView's
+# field backtraces — this daemon ships no dbgsym package, so the
+# workspace Cargo.toml declares `strip = "symbols"` in
+# [profile.release.package.hiview-buttond] instead (CI lintian:
+# unstripped-binary-or-object).
 # cargo-deb adds the single leading space itself — keep lines
 # flush-left (lintian).
 extended-description = """

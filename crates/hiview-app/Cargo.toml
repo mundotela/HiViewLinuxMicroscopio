@@ -30,13 +30,13 @@ tempfile.workspace = true
 # docs/reports/M11.md — every element the production pipelines use.
 [package.metadata.deb]
 name = "hiview"
-maintainer = "MundoTela Tecnologia <portskoll@gmail.com>"
+maintainer = "MundoTela Tecnologia <contato@mundotela.com.br>"
 # DEP-5 copyright — the license stanza points at common-licenses
 # instead of embedding the full GPL text (lintian).
 copyright = '''
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: HiView
-Upstream-Contact: MundoTela Tecnologia <portskoll@gmail.com>
+Upstream-Contact: MundoTela Tecnologia <contato@mundotela.com.br>
 Source: https://github.com/mundotela/HiViewLinuxMicroscopio
 
 Files: *
