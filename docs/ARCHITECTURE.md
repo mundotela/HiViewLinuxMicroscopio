@@ -488,4 +488,4 @@ O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar n
 2. ~~Controles V4L2~~: resolvido. **Nenhum** (§2, §6.11).
 3. ~~LEDs controláveis?~~: resolvido. **Não**, só pela roda do cabo.
 4. ~~Licença~~: resolvido (2026-11-10). **GPL-3.0-or-later**, copyright MundoTela Tecnologia (`LICENSE` na raiz com o texto oficial da GPLv3, `license = "GPL-3.0-or-later"` no workspace, `publish = false` em todos os crates).
-5. ~~Repositório~~: resolvido. `github.com/mundotela/HiViewLinuxMicroscopio` (privado). O push é feito pela engenharia.
+5. ~~Repositório~~: resolvido. `github.com/mundotela/HiViewLinuxMicroscopio`, **público desde 2026-11-15**, depois de uma auditoria do histórico (sem segredos, sem dados da rede local, sem arquivos indevidos; o e-mail pessoal nos commits antigos foi mantido por decisão do Henrique). Página do app: https://labs.mundotela.com.br/hiview/. O push é feito pela engenharia, e os commits novos saem com `contato@mundotela.com.br`.
