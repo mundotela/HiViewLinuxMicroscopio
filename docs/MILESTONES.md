@@ -297,6 +297,19 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 
 ---
 
+## Correções 1.1.1 → 1.1.3 (congelamento ao mexer no painel)
+
+> **Concluído em 2026-11-15** (merge `3a20b21`). Relatório em `docs/reports/M13.md`, com a investigação também em `M12.md` §10–11.
+
+- **Sintoma:** ao mexer na grade (ligar, mudar o espaçamento ou a cor), a UI congelava. Fechar só escondia a janela, o processo ficava a 100% de CPU e o app não reabria.
+- **1.1.1:** corrigiu dois defeitos reais encontrados no caminho. A configuração passou a ser gravada de forma atômica (o `config.toml` tinha ficado com 0 bytes), e a unidade px/mm do espaçamento voltou a ser sincronizada. O congelamento continuou.
+- **1.1.2:** a primeira pilha (`gdb`) apontou `set_tooltip_text` em `#[watch]`; as dicas viraram estáticas e foi criado o pacote de símbolos `hiview-dbgsym`. O congelamento continuou.
+- **1.1.3:** a pilha com símbolos apontou `app.rs:621`, o `ComboRow` da cor da grade. **Causa real:** um laço de realimentação `update_view → set_selected → notify → Input → update_view`, semeado pelos `FrameReady`. Todos os setters que emitem sinal saíram do `#[watch]` e passaram para uma sincronização com o handler bloqueado em `post_view`. Entraram também um teste de convergência e um alarme (`InputLoopGuard`).
+- **Validação:** teste de tortura do Henrique em todos os controles do painel, sem nenhum travamento, 0 `warn` e a configuração íntegra.
+- **Lição:** a primeira correção atacou sintomas plausíveis. O que resolveu foi **capturar a pilha com símbolos** antes de corrigir (regra agora no `CONVENTIONS.md`).
+
+---
+
 ## Backlog (sem milestone)
 
 - Patch upstream do quirk `05e3:f12a` no `uvcvideo`.
@@ -312,6 +325,7 @@ Todos usam a lâmina de calibração do projeto (`ARCHITECTURE.md §6.9`):
 - Galeria: seleção múltipla e arrastar-e-soltar.
 - **CI:** trocar `actions/upload-artifact@v4` pela versão mais nova (aviso do GitHub: Node.js 20 descontinuado nas Actions).
 - **Distribuição (ideias de 2026-11-14):** tornar o repositório público (antes, auditar o histórico em busca de segredos e dados pessoais e pesquisar conflito de marca com o nome "HiView"); Release no GitHub com os `.deb`; repositório apt próprio; Flathub (só o app, sem o serviço root); Debian oficial como meta de longo prazo.
+- **Pendências das correções 1.1.x:** tirar o `FrameReady` do ciclo `update_view` do Relm4 (o viewport atualizado direto, sem reavaliar o painel inteiro a 30/s; proposta no `M13.md`); o `.ddeb` tem 3 erros de metadados no lintian (limitação do cargo-deb, documentada no `M13.md`).
 - **Pendências do M12:** refazer a medição de CPU com a webcam (o relatório diz "≈0% de um núcleo" para YUY2 640×480, número implausível perto dos ~8–9% do microscópio no mesmo formato); o postinst do `hiview-buttond` repete "added to group — log out" em toda atualização, mesmo para quem já está no grupo (checar com `id -nG` antes); o `cargo deb` precisa sempre usar um binário recompilado (no M12, um `.deb` saiu com o binário antigo).
 - **Pacote `hiview-buttond` (pendências do M11):**
   - o postinst deve avisar quando houver uma instalação manual antiga (`/etc/systemd/system/hiview-buttond.service` ou `/usr/local/libexec/hiview-buttond`), que tem prioridade sobre a unit do pacote;

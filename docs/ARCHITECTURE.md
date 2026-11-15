@@ -1,6 +1,6 @@
 # HiView — Arquitetura
 
-> **Versão:** 1.1 · **Data:** 2026-11-14 · **Status:** HiView 1.1.0 (M0–M12 concluídos)
+> **Versão:** 1.1 · **Data:** 2026-11-15 · **Status:** HiView 1.1.3 (M0–M12 + correções 1.1.1–1.1.3)
 > **Engenharia:** Henrique (MundoTela Tecnologia) e Claude · **Implementação:** Devin
 > Documentos irmãos: `MILESTONES.md`, `CONVENTIONS.md`, `USER_MANUAL.md`, `DEVIN_REPORT_TEMPLATE.md`
 
@@ -380,6 +380,8 @@ A implementação mora em `hiview-core::image_adjust` (Rust puro, testável, sem
 
 Um arquivo de configuração inválido não pode derrubar o app: ele é renomeado para `config.toml.bak` e o app volta aos padrões, mostrando um aviso.
 
+**Gravação atômica (1.1.1):** a configuração é gravada num arquivo temporário, com `fsync` e depois `rename`, por **um único** gravador que agrupa os pedidos e grava sempre a versão mais recente. Antes, cada mudança criava uma thread e usava `fs::write` (que trunca e reescreve), e um encerramento no meio deixou o `config.toml` do Henrique com **0 bytes**.
+
 ---
 
 ## 7. Threads e concorrência
@@ -444,6 +446,7 @@ O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar n
   - `hiview`: `/usr/bin/hiview`, `.desktop`, ícones (SVG + simbólico), metainfo, man page `hiview(1)`, manual em `/usr/share/doc/hiview/USER_MANUAL.md`.
   - `hiview-buttond` (opcional): `/usr/libexec/hiview-buttond`, unit em `/usr/lib/systemd/system/` (hardening idêntico ao revisado no M9), `/usr/lib/modules-load.d/hiview.conf` e `/usr/lib/sysusers.d/hiview.conf`. O postinst cria o grupo (`systemd-sysusers`), ativa o serviço e adiciona o `SUDO_USER` ao grupo. O purge remove só o grupo. Os scripts de mantenedor foram revisados linha a linha antes do primeiro `sudo`.
   - Mantenedor: `MundoTela Tecnologia <portskoll@gmail.com>`.
+  - `hiview-dbgsym` (`.ddeb`, desde a 1.1.2): os símbolos de depuração separados (`debug = "line-tables-only"` + `separate-debug-symbols`). O `.deb` do app continua sem símbolos (~1,4 MB). Com o `.ddeb` instalado, `sudo gdb -p <PID> -batch -ex "bt 60"` mostra os nomes das funções e as linhas do HiView. Foi assim que o laço da 1.1.2 foi localizado.
 - **Instalação a partir do fonte** (alternativa ao `.deb`): o serviço do botão é instalado por `scripts/install-buttond.sh` (idempotente, com `--uninstall`). O script **não compila**: o usuário roda `cargo build --release -p hiview-buttond` antes, sem sudo, para não deixar arquivos de root em `target/`. O script recusa rodar sem `sudo` ou num shell root direto e instala em `/usr/local/libexec`, `/etc/systemd/system` e `/etc/modules-load.d`.
 
 ---
