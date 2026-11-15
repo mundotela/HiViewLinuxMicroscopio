@@ -48,14 +48,28 @@ fn form_dialog(
     name.set_title(strings::CALIBRATION_NAME_LABEL);
     name.set_text(initial_name);
 
+    // The collision message is a label under the entry, never a
+    // tooltip: `set_tooltip_text` re-triggers GTK's pick under the
+    // pointer on every keystroke — the GTK 4.14 pick-recursion path
+    // that freezes the UI (v1.1.2 rule: tooltips are set once, at
+    // construction).
+    let collision_hint = gtk::Label::new(Some(strings::CALIBRATION_NAME_TAKEN));
+    collision_hint.add_css_class("error");
+    collision_hint.add_css_class("caption");
+    collision_hint.set_xalign(0.0);
+    collision_hint.set_margin_start(12);
+    collision_hint.set_margin_end(12);
+    collision_hint.set_visible(false);
+
     let taken: Vec<String> = existing_names.to_vec();
     let validate = {
         let name = name.clone();
         let confirm = confirm.clone();
+        let hint = collision_hint.clone();
         move || {
             let text = name.text().to_string();
             let collision = taken.iter().any(|n| n == &text);
-            name.set_tooltip_text(collision.then_some(strings::CALIBRATION_NAME_TAKEN));
+            hint.set_visible(collision);
             if collision {
                 name.add_css_class("error");
             } else {
@@ -83,6 +97,7 @@ fn form_dialog(
         group.add(*row);
     }
     group.add(&name);
+    group.add(&collision_hint);
     let page = adw::PreferencesPage::new();
     page.add(&group);
     let clamp = adw::Clamp::new();

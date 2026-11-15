@@ -866,7 +866,14 @@ impl SimpleComponent for AppModel {
                                     set_group: Some(&mode_photo_btn),
                                     #[watch]
                                     set_sensitive: model.rec_supported,
-                                    #[watch]
+                                    // Tooltips are set ONCE, here at
+                                    // construction — never #[watch]:
+                                    // every update_view would re-call
+                                    // set_tooltip_text →
+                                    // trigger_tooltip_query → pick
+                                    // under the pointer → the GTK
+                                    // 4.14 pick-recursion freeze
+                                    // (v1.1.2 hotfix).
                                     set_tooltip_text: Some(model.video_mode_tooltip()),
                                     connect_toggled => Input::ShutterModeToggled,
                                 },
@@ -877,8 +884,9 @@ impl SimpleComponent for AppModel {
                             gtk::Button {
                                 #[watch]
                                 set_icon_name: model.shutter_icon(),
-                                #[watch]
-                                set_tooltip_text: Some(model.shutter_tooltip()),
+                                // Static tooltip, set once — the
+                                // pick-recursion rule above.
+                                set_tooltip_text: Some(strings::SHUTTER_MODE_TOOLTIP),
                                 #[watch]
                                 set_css_classes: model.shutter_css(),
                                 set_focusable: false,
@@ -2846,15 +2854,6 @@ impl AppModel {
         }
     }
 
-    /// Tooltip for the shutter button for the current mode/state.
-    fn shutter_tooltip(&self) -> &'static str {
-        match (self.shutter_mode, self.recording.is_some()) {
-            (_, true) => strings::RECORD_STOP_TOOLTIP,
-            (ShutterMode::Video, false) => strings::RECORD_START_TOOLTIP,
-            (ShutterMode::Photo, false) => strings::SHUTTER_TOOLTIP,
-        }
-    }
-
     /// CSS classes for the shutter button (`.recording` paints it red).
     fn shutter_css(&self) -> &'static [&'static str] {
         if self.recording.is_some() {
@@ -3491,6 +3490,50 @@ pub(crate) mod tests {
     ///
     /// NOT a `#[test]`: GTK can only init on one thread, so this
     /// runs inside the single `crate::tests::gtk_ui_contracts`.
+    /// Source contract (v1.1.2): a `set_tooltip_*` property must never
+    /// sit behind `#[watch]`/`#[track]` — every update_view would
+    /// re-call the setter, re-triggering GTK's tooltip query → pick
+    /// under the pointer → the GTK 4.14 pick-recursion freeze. This
+    /// test fails if anyone re-adds a watched tooltip, and is what
+    /// guarantees a spacing-only update never calls `set_tooltip_*`.
+    #[test]
+    fn no_watched_tooltips() {
+        for src in [
+            include_str!("app.rs"),
+            include_str!("measure_dialogs.rs"),
+            include_str!("measure_ui.rs"),
+        ] {
+            let mut watched = false;
+            for line in src.lines() {
+                let t = line.trim();
+                if t.starts_with("#[watch]") || t.starts_with("#[track") {
+                    watched = true;
+                    continue;
+                }
+                if t.starts_with("set_tooltip_text") || t.starts_with("set_tooltip_markup") {
+                    assert!(
+                        !watched,
+                        "`{t}` follows a #[watch]/#[track] — \
+                         tooltips must be set once at construction"
+                    );
+                }
+                // A blank/comment line keeps the attr context; any
+                // other property breaks it.
+                if !t.is_empty() && !t.starts_with("//") && !t.starts_with('#') {
+                    watched = false;
+                }
+            }
+        }
+        // measure_dialogs must not call the setter in runtime
+        // callbacks at all (the collision hint is a label).
+        let md = include_str!("measure_dialogs.rs");
+        assert!(
+            !md.lines()
+                .any(|l| l.trim_start().starts_with("name.set_tooltip")),
+            "measure_dialogs.rs: runtime set_tooltip_* call found"
+        );
+    }
+
     pub(crate) fn check() {
         let emitted = Rc::new(std::cell::RefCell::new(Vec::<(AdjustKind, f64)>::new()));
         let sink: Rc<dyn Fn(Input)> = {
