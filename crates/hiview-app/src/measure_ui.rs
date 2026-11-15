@@ -228,11 +228,10 @@ pub fn sync(
     let names: Vec<String> = std::iter::once(strings::CALIBRATION_NONE.to_string())
         .chain(config.profiles_for(device).map(|p| p.name.clone()))
         .collect();
-    let profiles: Vec<&hiview_core::CalibrationProfile> = config.profiles_for(device).collect();
-    let active_index = config
-        .active_profile_for(device)
-        .and_then(|active| profiles.iter().position(|p| p.name == active.name))
-        .map_or(0, |i| i + 1) as u32;
+    // The canonical index↔profile mapping (M13) — same function the
+    // `SelectCalibration` handler uses, so both sides agree on which
+    // filtered position a profile NAME occupies.
+    let active_index = config.active_profile_index(device);
     let current: Vec<String> = (0..panel.profile_model.n_items())
         .filter_map(|i| panel.profile_model.string(i).map(|s| s.to_string()))
         .collect();
@@ -380,6 +379,20 @@ pub(crate) mod tests {
         assert_eq!(panel.profile_model.string(1).as_deref(), Some("teste"));
         assert_eq!(panel.profile_row.selected(), 1);
         assert!(panel.rename_btn.is_sensitive());
+        assert!(panel.delete_btn.is_sensitive());
+
+        // M13: another camera streams — the combo shows only ITS
+        // (empty) profile list and "Excluir" stays insensitive, so a
+        // click can never reach a foreign profile.
+        sync(&mut panel, &set, &config2, "outra-camera", &sink);
+        assert_eq!(panel.profile_model.n_items(), 1);
+        assert_eq!(panel.profile_row.selected(), 0);
+        assert!(!panel.rename_btn.is_sensitive());
+        assert!(!panel.delete_btn.is_sensitive());
+        // Back to the profiled device: the same profile is still
+        // there, still selected (by name, via active_profile_index).
+        sync(&mut panel, &set, &config2, "dev", &sink);
+        assert_eq!(panel.profile_row.selected(), 1);
         assert!(panel.delete_btn.is_sensitive());
 
         // Arming Calibrate keeps the tool combo on "Nenhuma" but the

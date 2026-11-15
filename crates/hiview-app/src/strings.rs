@@ -100,7 +100,10 @@ pub const FREEZE_TOOLTIP: &str = "Congelar a imagem (F)";
 pub const FROZEN_BADGE: &str = "CONGELADO";
 
 /// Tooltip of the shutter toolbar button (`Espaço`).
-pub const SHUTTER_TOOLTIP: &str = "Tirar foto (Espaço)";
+/// Static shutter-button tooltip — the icon/CSS already convey the
+/// mode; a dynamic tooltip would re-trigger GTK's pick under the
+/// pointer on every update_view (v1.1.2: tooltips set once only).
+pub const SHUTTER_MODE_TOOLTIP: &str = "Foto ou gravação (Espaço)";
 
 /// Toast shown after a photo is written.
 pub const PHOTO_SAVED: &str = "Foto salva";
@@ -155,12 +158,6 @@ pub const MODE_VIDEO_TOOLTIP: &str = "Modo vídeo — aperte R para gravar";
 /// Tooltip of the video-mode toggle when no H.264 encoder exists.
 pub const MODE_VIDEO_UNAVAILABLE_TOOLTIP: &str =
     "Gravação indisponível: codificador H.264 não encontrado";
-
-/// Tooltip of the shutter button in video mode, idle (`R`).
-pub const RECORD_START_TOOLTIP: &str = "Iniciar gravação (R)";
-
-/// Tooltip of the shutter button while recording (`R`).
-pub const RECORD_STOP_TOOLTIP: &str = "Parar gravação (R)";
 
 /// Toast shown after a video is written.
 pub const VIDEO_SAVED: &str = "Vídeo salvo";

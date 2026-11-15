@@ -72,5 +72,7 @@ mod tests {
         crate::app::tests::check();
         crate::measure_ui::tests::check();
         crate::shortcuts::tests::check();
+        // Last: launches the full component — heavy and stateful.
+        crate::app::tests::check_update_convergence();
     }
 }
