@@ -381,6 +381,20 @@ pub(crate) mod tests {
         assert!(panel.rename_btn.is_sensitive());
         assert!(panel.delete_btn.is_sensitive());
 
+        // M13: another camera streams — the combo shows only ITS
+        // (empty) profile list and "Excluir" stays insensitive, so a
+        // click can never reach a foreign profile.
+        sync(&mut panel, &set, &config2, "outra-camera", &sink);
+        assert_eq!(panel.profile_model.n_items(), 1);
+        assert_eq!(panel.profile_row.selected(), 0);
+        assert!(!panel.rename_btn.is_sensitive());
+        assert!(!panel.delete_btn.is_sensitive());
+        // Back to the profiled device: the same profile is still
+        // there, still selected (by name, via active_profile_index).
+        sync(&mut panel, &set, &config2, "dev", &sink);
+        assert_eq!(panel.profile_row.selected(), 1);
+        assert!(panel.delete_btn.is_sensitive());
+
         // Arming Calibrate keeps the tool combo on "Nenhuma" but the
         // calibrate row's subtitle flags the armed mode.
         let mut cal = MeasureSet::default();

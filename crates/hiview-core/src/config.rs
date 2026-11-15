@@ -562,6 +562,57 @@ mod tests {
         assert_eq!(config.active_profile_index(micro), 0);
     }
 
+    /// M13: "Excluir" must only ever remove the ACTIVE profile of the
+    /// ACTIVE device — a foreign device's stored name, a device with
+    /// no active selection, and same-named profiles on other devices
+    /// are all out of reach.
+    #[test]
+    fn remove_profile_never_touches_another_device() {
+        let mut config = AppConfig::default();
+        for (name, device) in [
+            ("micro-A", "05e3:f12a"),
+            ("webcam-A", "0408:403a"),
+            // Same NAME on a different device is a distinct profile.
+            ("micro-A", "0408:403a"),
+        ] {
+            config.calibration.push(crate::measure::CalibrationProfile {
+                name: name.into(),
+                device: device.into(),
+                ..Default::default()
+            });
+        }
+        let micro = "05e3:f12a";
+        let webcam = "0408:403a";
+
+        // Webcam "active" in the UI sense: a profile of hers exists
+        // and is selected. Deleting removes ONLY her own profile —
+        // the microscope's entries, including the same-named one,
+        // survive.
+        config.set_active_profile(webcam, Some("webcam-A"));
+        config.remove_profile(webcam, "webcam-A");
+        assert_eq!(config.profiles_for(webcam).count(), 1); // the same-named twin
+        assert_eq!(config.profiles_for(micro).count(), 1);
+        assert_eq!(config.active_profile_index(webcam), 0);
+        assert!(!config.active_calibrations.contains_key(webcam));
+
+        // A device with NO active selection: nothing to delete —
+        // replicating the handler's `active_calibrations.get(device)`
+        // lookup returns None, so no remove runs at all.
+        assert!(!config.active_calibrations.contains_key(micro));
+        let before = config.calibration.len();
+        if let Some(name) = config.active_calibrations.get(micro).cloned() {
+            config.remove_profile(micro, &name);
+        }
+        assert_eq!(config.calibration.len(), before);
+        assert_eq!(config.profiles_for(micro).count(), 1);
+
+        // And a stored name pointing at a profile of ANOTHER device
+        // is still gated: remove_profile matches name AND device.
+        config.remove_profile(webcam, "micro-A");
+        assert_eq!(config.profiles_for(webcam).count(), 0); // webcam's own "micro-A" gone
+        assert_eq!(config.profiles_for(micro).count(), 1); // micro's survives
+    }
+
     /// The wizard flow end-to-end at the domain level (§6.9): a
     /// Calibrate drag commits a `CalibrationLine` — the line becomes
     /// a profile that is upserted, persisted and active after reload.
