@@ -27,13 +27,13 @@ tempfile.workspace = true
 # ./debian/ — they run as ROOT and are reviewed per CONVENTIONS §11.1.
 [package.metadata.deb]
 name = "hiview-buttond"
-maintainer = "MundoTela Tecnologia <portskoll@gmail.com>"
+maintainer = "MundoTela Tecnologia <contato@mundotela.com.br>"
 # DEP-5 copyright — points at common-licenses instead of embedding
 # the full GPL text (lintian).
 copyright = '''
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: hiview-buttond
-Upstream-Contact: MundoTela Tecnologia <portskoll@gmail.com>
+Upstream-Contact: MundoTela Tecnologia <contato@mundotela.com.br>
 Source: https://github.com/mundotela/HiViewLinuxMicroscopio
 
 Files: *

@@ -445,7 +445,7 @@ O Devin roda na máquina alvo, **com o microscópio conectado**, e pode testar n
 - **Pacotes (M11, cargo-deb, lintian sem erros e bloqueante no CI):**
   - `hiview`: `/usr/bin/hiview`, `.desktop`, ícones (SVG + simbólico), metainfo, man page `hiview(1)`, manual em `/usr/share/doc/hiview/USER_MANUAL.md`.
   - `hiview-buttond` (opcional): `/usr/libexec/hiview-buttond`, unit em `/usr/lib/systemd/system/` (hardening idêntico ao revisado no M9), `/usr/lib/modules-load.d/hiview.conf` e `/usr/lib/sysusers.d/hiview.conf`. O postinst cria o grupo (`systemd-sysusers`), ativa o serviço e adiciona o `SUDO_USER` ao grupo. O purge remove só o grupo. Os scripts de mantenedor foram revisados linha a linha antes do primeiro `sudo`.
-  - Mantenedor: `MundoTela Tecnologia <portskoll@gmail.com>`.
+  - Mantenedor: `MundoTela Tecnologia <contato@mundotela.com.br>`.
   - `hiview-dbgsym` (`.ddeb`, desde a 1.1.2): os símbolos de depuração separados (`debug = "line-tables-only"` + `separate-debug-symbols`). O `.deb` do app continua sem símbolos (~1,4 MB). Com o `.ddeb` instalado, `sudo gdb -p <PID> -batch -ex "bt 60"` mostra os nomes das funções e as linhas do HiView. Foi assim que o laço da 1.1.2 foi localizado.
 - **Instalação a partir do fonte** (alternativa ao `.deb`): o serviço do botão é instalado por `scripts/install-buttond.sh` (idempotente, com `--uninstall`). O script **não compila**: o usuário roda `cargo build --release -p hiview-buttond` antes, sem sudo, para não deixar arquivos de root em `target/`. O script recusa rodar sem `sudo` ou num shell root direto e instala em `/usr/local/libexec`, `/etc/systemd/system` e `/etc/modules-load.d`.
 
