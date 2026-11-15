@@ -377,7 +377,16 @@ pub struct AppModel {
     frame_times: VecDeque<Instant>,
     /// Persistent preferences (docs/ARCHITECTURE.md section 6.12).
     config: AppConfig,
-    config_path: PathBuf,
+    /// Last `active_px_per_mm` seen at a camera state change — the
+    /// calibration can only resolve while a pipeline runs (M12), so a
+    /// state transition may activate/clear it just like a profile
+    /// selection does.
+    state_ppm: Option<f64>,
+    /// Saver-worker channel: `persist_config` posts the latest config;
+    /// the single worker drains to the newest value and writes it
+    /// atomically — a burst of changes can never spawn a thread storm
+    /// or race concurrent writers on the same file (v1.1.1).
+    config_saver: std::sync::mpsc::Sender<AppConfig>,
     /// True when the config file was invalid and reset; a toast warns once.
     config_recovered: bool,
     /// Background photo encode/write worker (section 7).
@@ -1047,7 +1056,8 @@ impl SimpleComponent for AppModel {
             fps_label: String::new(),
             frame_times: VecDeque::new(),
             config,
-            config_path: cfg_path,
+            state_ppm: None,
+            config_saver: Self::spawn_config_saver(cfg_path),
             config_recovered,
             photos,
             toast_overlay: adw::ToastOverlay::new(),
@@ -1514,9 +1524,12 @@ impl SimpleComponent for AppModel {
                 }
             }
             Input::SetGridSpacing(value) => {
-                // The row edits millimetres while a calibration is
-                // active, pixels otherwise (§6.9).
-                let spacing = if self.active_px_per_mm().is_some() {
+                // The row's unit follows the STORED variant — the
+                // `rekeyed` conversions keep it aligned with the
+                // calibration state (§6.9), so a mm value can never
+                // land in a px-ranged row and get rewritten by a
+                // clamp notify.
+                let spacing = if self.grid_spacing_is_mm() {
                     GridSpacing::Millimeters(value.clamp(
                         hiview_core::MIN_GRID_SPACING_MM,
                         hiview_core::MAX_GRID_SPACING_MM,
@@ -1885,6 +1898,18 @@ impl AppModel {
             self.searching_page.description(),
         );
         self.maybe_apply_stored_adjust();
+        // M12 regression fix: `active_px_per_mm` needs a running
+        // pipeline, so the calibration state can flip on transitions
+        // (camera switch, stream start) — run the SAME path a profile
+        // selection would: re-key px↔mm spacings, refresh the combo
+        // and the spacing row, persist.
+        let new_ppm = self.active_px_per_mm();
+        if new_ppm != self.state_ppm {
+            let old_ppm = self.state_ppm;
+            self.state_ppm = new_ppm;
+            self.calibration_changed(old_ppm);
+        }
+        self.sync_grid_unit();
         if self.state != CameraState::Streaming {
             self.viewport.reset();
             self.set_frozen(false);
@@ -2093,11 +2118,22 @@ impl AppModel {
 
     /// Grid spacing row title — the unit follows the calibration (§6.9).
     fn grid_spacing_label(&self) -> &'static str {
-        if self.active_px_per_mm().is_some() {
+        if self.grid_spacing_is_mm() {
             strings::GRID_SPACING_MM_LABEL
         } else {
             strings::GRID_SPACING_PX_LABEL
         }
+    }
+
+    /// Whether the stored grid spacing is expressed in millimetres —
+    /// the unit the spacing row edits. `calibration_changed` re-keys
+    /// the stored variant whenever the active calibration flips, so
+    /// this is true exactly while a calibration applies (§6.9).
+    fn grid_spacing_is_mm(&self) -> bool {
+        matches!(
+            self.config.overlays.grid.spacing,
+            GridSpacing::Millimeters(_)
+        )
     }
 
     /// The value the grid spacing row shows, in its current unit.
@@ -2111,7 +2147,7 @@ impl AppModel {
     /// Reconfigures the grid spacing row for its current unit — the
     /// adjustment's range and digits can't come from a `#[watch]`.
     fn sync_grid_unit(&self) {
-        let (value, lo, hi, step, digits) = if self.active_px_per_mm().is_some() {
+        let (value, lo, hi, step, digits) = if self.grid_spacing_is_mm() {
             (
                 self.grid_spacing_display(),
                 hiview_core::MIN_GRID_SPACING_MM,
@@ -2883,13 +2919,28 @@ impl AppModel {
 
     /// Writes the current config off the UI thread (section 7).
     fn persist_config(&self) {
-        let config = self.config.clone();
-        let path = self.config_path.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = save_config(&config, &path) {
-                tracing::error!("could not save config: {e}");
-            }
-        });
+        let _ = self.config_saver.send(self.config.clone());
+    }
+
+    /// One background thread owns `config.toml` writes: it drains the
+    /// channel to the LATEST posted config and persists that — bursts
+    /// coalesce to a single atomic write instead of N racing threads.
+    fn spawn_config_saver(path: PathBuf) -> std::sync::mpsc::Sender<AppConfig> {
+        let (tx, rx) = std::sync::mpsc::channel::<AppConfig>();
+        std::thread::Builder::new()
+            .name("hiview-config-saver".into())
+            .spawn(move || {
+                while let Ok(mut config) = rx.recv() {
+                    while let Ok(newer) = rx.try_recv() {
+                        config = newer;
+                    }
+                    if let Err(e) = save_config(&config, &path) {
+                        tracing::error!("could not save config: {e}");
+                    }
+                }
+            })
+            .unwrap_or_else(|e| panic!("spawn config saver thread: {e}"));
+        tx
     }
 
     /// Label of one adjustment slider (`strings::ADJUST_NAMES` follows
