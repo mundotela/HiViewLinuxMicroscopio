@@ -1,3 +1,16 @@
+hiview (1.1.2-1) unstable; urgency=medium
+
+  * Hotfix: tooltips are now set once at widget construction.
+    Dynamic tooltips re-triggered gtk_widget_trigger_tooltip_query
+    under the pointer on every Relm4 update_view, hitting the GTK
+    4.14 pick-recursion freeze (SpinRow repeated clicks).
+  * Collision hint in the calibration-name dialog is an inline
+    label instead of a runtime tooltip.
+  * Release binaries keep line tables and skip strip for
+    symbolized field backtraces.
+
+ -- MundoTela Tecnologia <portskoll@gmail.com>  Sun, 15 Nov 2026 00:18:05 -0300
+
 hiview (1.1.1-1) unstable; urgency=medium
 
   * Versão 1.1.1 — correção de congelamento ao ligar a grade:

@@ -62,6 +62,12 @@ License: GPL-3+
 '''
 section = "science"
 priority = "optional"
+separate-debug-symbols = true
+dbgsym = true
+# Ships a hiview-dbgsym package alongside the .deb — keeps the
+# installed binary small while a gdb attach on the field package
+# still resolves HiView frames (v1.1.1 lesson: the stripped build
+# showed only ??? above GTK).
 changelog = "debian/changelog"
 # $auto (shlibs) covers GTK/adwaita/GStreamer libs. Plugins:
 # - plugins-base: videoconvert, audioconvert/resample, opusenc/dec,
