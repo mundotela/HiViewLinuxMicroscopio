@@ -52,3 +52,10 @@ signal-hook = "0.3"
 # is installed. Field builds keep a stripped main .deb either way.
 [profile.release]
 debug = "line-tables-only"
+
+# ...except the button daemon: it ships no dbgsym package, so its
+# binary must reach the .deb already stripped — declared here, not
+# stripped by hand before `cargo deb` (v1.1.3 CI lintian failure:
+# unstripped-binary-or-object).
+[profile.release.package.hiview-buttond]
+strip = "symbols"

@@ -67,13 +67,10 @@ jobs:
         run: cargo install cargo-deb
 
       - name: Build packages
-        run: |
-          cargo deb -p hiview-app
-          cargo deb -p hiview-buttond
-
-      - name: Lintian
-        # Errors (E:) fail the build; warnings stay informational.
-        run: lintian --fail-on error target/debian/*.deb
+        # Same script as the developer notebook — the buttond strip
+        # lives in its [package.metadata.deb] (strip = true), not in
+        # a manual step.
+        run: ./scripts/build-debs.sh
 
       - name: Upload .deb artifacts
         uses: actions/upload-artifact@v4

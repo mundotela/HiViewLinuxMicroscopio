@@ -64,6 +64,11 @@ changelog = "debian/changelog"
 # generated postinst fragment (systemd-units below).
 depends = "$auto"
 maintainer-scripts = "debian/"
+# The workspace release profile keeps line tables for HiView's
+# field backtraces — this daemon ships no dbgsym package, so the
+# workspace Cargo.toml declares `strip = "symbols"` in
+# [profile.release.package.hiview-buttond] instead (CI lintian:
+# unstripped-binary-or-object).
 # cargo-deb adds the single leading space itself — keep lines
 # flush-left (lintian).
 extended-description = """
