@@ -1,3 +1,10 @@
+hiview-buttond (1.1.1-1) unstable; urgency=medium
+
+  * Versão 1.1.1 — apenas reempacotamento da nova versão; nenhuma
+    mudança de código, scripts ou unit.
+
+ -- MundoTela Tecnologia <portskoll@gmail.com>  Sat, 14 Nov 2026 23:30:49 -0300
+
 hiview-buttond (1.1.0-1) unstable; urgency=medium
 
   * Versão 1.1.0 — apenas reempacotamento da nova versão; nenhuma

@@ -1,3 +1,15 @@
+hiview (1.1.1-1) unstable; urgency=medium
+
+  * Versão 1.1.1 — correção de congelamento ao ligar a grade:
+    escrita de configuração agora é atômica e coalescida
+    (uma thread por gravação podia corromper config.toml),
+    espaçamentos de grade/mira são validados no renderer
+    (finitos e ≥ 4 px na tela), e a linha de espaçamento
+    resincroniza a unidade quando a calibração ativa muda
+    com a câmera.
+
+ -- MundoTela Tecnologia <portskoll@gmail.com>  Sat, 14 Nov 2026 23:30:49 -0300
+
 hiview (1.1.0-1) unstable; urgency=medium
 
   * Versão 1.1.0 — outras câmeras USB: escolha manual quando o
