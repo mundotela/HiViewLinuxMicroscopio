@@ -106,6 +106,40 @@ const MEASURE_FONT_PX: f64 = 19.0;
 /// Angle arc radius, in device pixels.
 const MEASURE_ARC_PX: f64 = 16.0;
 
+/// Minimum grid/tick spacing on screen, in device pixels. Below this
+/// the lines fuse into a solid wash — and a degenerate spacing must
+/// never reach the position loops (v1.1.1 hardening).
+const MIN_SCREEN_SPACING_PX: f64 = 4.0;
+
+/// Whether the "spacing too small — overlay skipped" warning was
+/// already logged: the draw path runs once per frame, so the warning
+/// fires once per app run instead of once per frame.
+static SPACING_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The spacing a draw loop may use, in IMAGE pixels: the stored value
+/// must resolve to a finite positive number AND still be at least
+/// [`MIN_SCREEN_SPACING_PX`] on screen after `view.scale`. `None` (skip
+/// the lines entirely) whenever the input is NaN, infinite, ≤ 0 or
+/// fused by zoom — no draw loop may ever depend on an unvalidated
+/// spacing.
+fn validated_spacing(spacing_px: f64, view: &ViewTransform, what: &str) -> Option<f64> {
+    let ok = spacing_px.is_finite()
+        && spacing_px > 0.0
+        && view.scale.is_finite()
+        && view.scale > 0.0
+        && spacing_px * view.scale >= MIN_SCREEN_SPACING_PX;
+    if ok {
+        return Some(spacing_px);
+    }
+    if !SPACING_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        tracing::warn!(
+            "{what}: spacing {spacing_px} px × scale {} is degenerate — overlay lines skipped",
+            view.scale,
+        );
+    }
+    None
+}
+
 /// Vertical and horizontal grid lines spanning the whole image.
 fn draw_grid(
     cr: &cairo::Context,
@@ -116,6 +150,9 @@ fn draw_grid(
     px: f64,
 ) {
     let spacing = grid.spacing.pixels(px_per_mm);
+    let Some(spacing) = validated_spacing(spacing, view, "grid") else {
+        return;
+    };
     let x0 = view.offset.x;
     let y0 = view.offset.y;
     let x1 = x0 + frame.width * view.scale;
@@ -192,7 +229,13 @@ fn draw_ticks(
     px: f64,
 ) {
     let half = CROSSHAIR_TICK_LEN_PX * view.scale;
-    let tick_spacing = cross.tick_spacing.pixels(px_per_mm);
+    let Some(tick_spacing) = validated_spacing(
+        cross.tick_spacing.pixels(px_per_mm),
+        view,
+        "crosshair ticks",
+    ) else {
+        return;
+    };
     // Ticks on the horizontal arm are short vertical marks; on the
     // vertical arm, short horizontal marks.
     for x in grid_line_positions(frame.width, tick_spacing) {
@@ -512,5 +555,136 @@ mod tests {
         assert!(is_blank(pixel(&data, stride, 90, 799)));
         assert!(is_greenish(pixel(&data, stride, 90, 100)));
         assert!(is_greenish(pixel(&data, stride, 90, 700)));
+    }
+
+    fn painted_count(data: &[u8]) -> usize {
+        data.as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| !is_blank(**p))
+            .count()
+    }
+
+    /// v1.1.1 hardening: no draw loop may depend on an unvalidated
+    /// spacing. Zero, negative, NaN, infinite and sub-floor values must
+    /// all draw NOTHING — before the guard they reached
+    /// `grid_line_positions` and either clamped to a flood of lines or
+    /// painted garbage.
+    #[test]
+    fn degenerate_grid_spacings_draw_nothing() {
+        let view = ViewTransform::fit(FRAME, WIDGET); // scale 1.25
+        for spacing in [
+            0.0,
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            1.0,
+            2.0,
+            3.0,
+            3.1,
+        ] {
+            let (data, _) = render(FRAME, WIDGET, &view, &grid_state(spacing));
+            assert_eq!(
+                painted_count(&data),
+                0,
+                "spacing {spacing} must draw nothing"
+            );
+        }
+    }
+
+    /// The floor applies to SCREEN pixels: a spacing that is generous
+    /// in the image still fuses to a solid wash at extreme zoom-out.
+    #[test]
+    fn extreme_zoom_out_fuses_and_skips_the_grid() {
+        // 64 px image spacing at scale 0.05 → 3.2 px on screen: below
+        // the 4 px floor, so no lines.
+        let view = ViewTransform {
+            scale: 0.05,
+            offset: Point::new(0.0, 0.0),
+            mode: ViewMode::Fixed,
+        };
+        let (data, _) = render(FRAME, WIDGET, &view, &grid_state(64.0));
+        assert_eq!(painted_count(&data), 0);
+    }
+
+    /// The crosshair "ticks" share the same floor: a degenerate tick
+    /// spacing drops the marks but still draws the arms.
+    #[test]
+    fn degenerate_tick_spacing_skips_ticks_but_keeps_the_cross() {
+        let view = ViewTransform::fit(FRAME, WIDGET);
+        let mut state = OverlayState::default();
+        state.crosshair.enabled = true;
+        state.crosshair.style = CrosshairStyle::Ticks;
+        // 1.6 px image → 2.0 px on screen: degenerate.
+        state.crosshair.tick_spacing = GridSpacing::Pixels(1.6);
+        let (data, stride) = render(FRAME, WIDGET, &view, &state);
+        // Arm pixel stays painted (reddish cross on the center lines).
+        let arm = pixel(&data, stride, 404, 300);
+        assert!(arm[2] > 100, "expected painted cross arm, got {arm:?}");
+        // x=402 is exactly one tick position (400 + 1.6·1.25·1); with
+        // the spacing rejected no tick may reach y=298 (±3.75 px).
+        assert!(is_blank(pixel(&data, stride, 402, 298)));
+        // A valid tick spacing still draws the mark.
+        state.crosshair.tick_spacing = GridSpacing::Pixels(64.0);
+        let (data, stride) = render(FRAME, WIDGET, &view, &state);
+        assert!(!is_blank(pixel(&data, stride, 400 - 80, 298)));
+    }
+
+    /// Reproduction scaffold for the v1.1.1 freeze: Henrique's real
+    /// v1.0 config copy loads, migrates the global calibration to the
+    /// microscope key, resolves the stored MILLIMETRE spacing through
+    /// the profile and renders a full 640×480 grid — the exact path
+    /// his toggle exercised. It must finish instantly and draw a
+    /// finite, valid set of lines.
+    #[test]
+    fn henrique_migrated_config_draws_grid_for_640x480() {
+        const TOML: &str = r#"active_calibration = "Calibração 1"
+
+[overlays.grid]
+enabled = false
+opacity = 0.6
+
+[overlays.grid.spacing]
+unit = "millimeters"
+value = 0.4843652092497667
+
+[overlays.crosshair]
+enabled = false
+style = "ticks"
+
+[overlays.crosshair.tick_spacing]
+unit = "millimeters"
+value = 0.12109130231244168
+
+[[calibration]]
+name = "Calibração 1"
+px_per_mm = 82.58231441097101
+"#;
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, TOML).unwrap_or_else(|e| panic!("write: {e}"));
+        let hiview_core::ConfigLoad::Loaded(config) = hiview_core::load_config(&path) else {
+            panic!("config must load and migrate");
+        };
+        // Migration landed: the legacy global profile belongs to the
+        // microscope key now.
+        let ppm = config.active_profile_for("05e3:f12a").map(|p| p.px_per_mm);
+        assert_eq!(ppm, Some(82.58231441097101));
+        // The stored mm spacing resolves through the migrated profile.
+        let spacing = config.overlays.grid.spacing.pixels(ppm);
+        assert!(spacing.is_finite() && (spacing - 40.0).abs() < 1.0);
+        // …and the renderer handles the exact resolved state at the
+        // real frame size — a full draw must terminate.
+        let view = ViewTransform::fit(FRAME, WIDGET);
+        let mut state = OverlayState::default();
+        state.grid.enabled = true;
+        state.grid.opacity = 1.0;
+        state.grid.spacing = config.overlays.grid.spacing;
+        state.measure.px_per_mm = ppm;
+        let (data, stride) = render(FRAME, WIDGET, &view, &state);
+        // 40 px image spacing → a vertical line every 50 widget px;
+        // (50, 100) is an intersection of two lines.
+        assert!(is_greenish(pixel(&data, stride, 50, 100)));
     }
 }
