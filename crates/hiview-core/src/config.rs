@@ -306,14 +306,31 @@ pub fn load_config(path: &Path) -> ConfigLoad {
 
 /// Serializes the config to `path`, creating parent directories.
 ///
+/// The write is ATOMIC: serialize to a sibling temp file, fsync it,
+/// then `rename(2)` over the target — a crash or kill mid-write can
+/// never leave a torn/empty `config.toml` (v1.1.1: a non-atomic
+/// `fs::write` truncated the file to 0 bytes when the process was
+/// killed between truncate and write).
+///
 /// # Errors
 /// Returns [`crate::error::Error`] on serialization or I/O failure.
 pub fn save_config(config: &AppConfig, path: &Path) -> Result<()> {
+    use std::io::Write;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let text = toml::to_string_pretty(config)?;
-    fs::write(path, text)?;
+    let tmp = path.with_file_name(format!(
+        ".{}.tmp",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("config.toml")
+    ));
+    let mut file = fs::File::create(&tmp)?;
+    file.write_all(text.as_bytes())?;
+    // Best-effort durability: a failed fsync must not lose the rename.
+    let _ = file.sync_all();
+    fs::rename(&tmp, path)?;
     Ok(())
 }
 
